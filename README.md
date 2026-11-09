@@ -2,13 +2,18 @@
 
 popsim is an agent-based society simulation, written in pure Python on a custom Entity-Component-System, where prices, inflation and trade flows emerge from NPCs with needs, traits and local information trading through per-city order books. Gold and goods are strictly conserved, so every economic effect can be traced to its cause. You run scenarios, watch them in a web dashboard, and even trade by hand as a player.
 
-![road vs no road](docs/arbitrage_compare.png)
-![stimulus vs control](docs/inflation_compare.png)
+![popsim dashboard: prices and society charts](images/dash_main.png)
 
 ## Features
 
 - **Emergent economy:** no scripted prices; NPCs with needs (food, rest, shelter, wealth), traits and remembered prices decide, work, trade and travel.
+
+  ![Citizen inspector](images/citizen_inspector.png)
+
 - **Order-book markets:** a continuous double auction per city, with merchants that scout roads and arbitrage price gaps.
+
+  ![Market tab](images/market.png)
+
 - **Strict conservation:** gold and goods are audited every day and by a full ledger replay at the end of each run.
 - **Scenarios in YAML:** cities, resources, roads, taxes, public jobs and events (stimulus, minting, new roads), with inheritance between files.
 - **Spatial worlds:** coordinates, houses, workplaces and walking time between places.
@@ -36,35 +41,9 @@ This is a source-available license, not an OSI open-source one.
 
 Specification: [INSTRUCTIONS.md](INSTRUCTIONS.md) and [SPECIFICATIONS.md](SPECIFICATIONS.md). Build plan and status: [MVP_PLAN.md](MVP_PLAN.md).
 
-## Development without Docker (uv, optional)
-
-Dependencies are managed with [uv](https://docs.astral.sh/uv/) (REQ-1B.1). The Python version is
-pinned in `.python-version`.
-
-```bash
-uv sync                                       # creates .venv and uv.lock (commit uv.lock)
-uv run popsim run scenarios/arbitrage.yaml    # → runs/arbitrage/ (open it in the dashboard)
-uv run popsim run scenarios/inflation.yaml
-uv run popsim run scenarios/inflation_control.yaml
-uv run popsim compare runs/inflation_control runs/inflation --labels control,stimulus --out runs/inflation.png
-
-uv run pytest                  # everything (~25 s)
-uv run pytest -m "not slow"    # skip the two scenario acceptance runs
-
-uv add <package>               # new runtime dependency
-uv add --dev <package>         # new dev-only tool
-```
-
-A 60-day run with 120 NPCs takes about 7 s.
-
 ## Dashboard
 
-```bash
-docker compose up --build -d      # market API + dashboard
-open http://localhost:8000
-# or without Docker:
-uv run popsim dashboard           # http://127.0.0.1:8000, in-process market unless POPSIM_API_URL is set
-```
+Start it with `make start` (see Setup) and open <http://localhost:8000>.
 
 - **Runs:** every folder in `runs/`. A run opens on a world map with a day scrubber (drag it, or press
   Replay) beside the city figures for that day. Below are interactive charts of prices, society and
@@ -105,9 +84,8 @@ To place cities on the map yourself, give them a `pos: [x, y]` (each 0–1). The
 
 ## Containers (Docker Compose)
 
-Everything also runs in containers, with no host Python needed (REQ-1B.2, REQ-1B.3). The images
-install dependencies from `uv.lock`, so run `uv lock` (or `uv sync`) once and commit the lock file
-before the first build.
+Everything runs in containers, with no host Python needed (REQ-1B.2, REQ-1B.3). The images
+install dependencies from the committed `uv.lock`.
 
 ```bash
 docker compose up --build -d                             # API + dashboard on :8000
@@ -186,10 +164,11 @@ centre; leave it out and the position is generated, reproducibly, inside the cit
 
 ## Market API (REST)
 
+The API starts with `make start` (port 8080). The `sim` service already uses it through `POPSIM_API_URL`:
+
 ```bash
-uv run popsim serve --port 8080 --db popsim_api.sqlite     # or: docker compose up -d api
-uv run popsim run scenarios/arbitrage.yaml --api http://127.0.0.1:8080 --save runs/a.pkl
-uv run popsim run --resume runs/a.pkl --days 10 --api http://127.0.0.1:8080
+docker compose run --rm sim run scenarios/arbitrage.yaml --save runs/a.pkl
+docker compose run --rm sim run --resume runs/a.pkl --days 10
 ```
 
 | route | purpose |
