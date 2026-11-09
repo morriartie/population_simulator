@@ -1,6 +1,6 @@
 # popsim
 
-popsim is an agent-based society simulation, written in pure Python on a custom Entity-Component-System, where prices, inflation and trade flows emerge from NPCs with needs, traits and local information trading through per-city order books. Gold and goods are strictly conserved, so every economic effect can be traced to its cause. You run scenarios, watch them in a web dashboard, and even trade by hand as a player.
+popsim is an agent-based society simulation, written in pure Python on a custom Entity-Component-System, where prices, inflation and trade flows emerge from NPCs with needs, traits and local information trading through per-city order books. Gold and goods are strictly conserved, so every economic effect can be traced to its cause. You run scenarios, watch them in a web dashboard, and even trade by hand as a player. It can be used as a standalone application for world building or in parallel with some game to mod it with a simulated economy.
 
 ![popsim dashboard: prices and society charts](images/dash_main.png)
 

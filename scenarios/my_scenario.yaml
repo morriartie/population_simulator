@@ -1,0 +1,124 @@
+extends: baseline.yaml
+world_name: my_scenario
+cities:
+- name: A
+  population: 60
+  nodes:
+  - {good: food, initial: 300, max_amount: 400, regen_per_hour: 5, base_rate: 0.7, stamina_cost: 5}
+  - {good: wood, initial: 300, max_amount: 400, regen_per_hour: 4, base_rate: 0.7, stamina_cost: 5}
+  x: 4
+  y: 1
+  workplaces:
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  houses: {count: 3}
+- name: B
+  population: 60
+  nodes:
+  - {good: food, initial: 300, max_amount: 450, regen_per_hour: 6, base_rate: 0.7, stamina_cost: 5}
+  - {good: wood, initial: 20, max_amount: 40, regen_per_hour: 0.35, base_rate: 0.25, stamina_cost: 12}
+  - good: food
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [-0.63, 1.89]
+  - good: food
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [-0.89, -1.78]
+  - good: food
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [-0.89, -1.78]
+  - good: food
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [-0.63, 1.89]
+  - good: food
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [1.59, 1.19]
+  - good: wood
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [-0.89, -1.78]
+  - good: food
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [-0.89, -1.78]
+  x: -4
+  y: 2
+  workplaces:
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  houses: {count: 3}
+- name: City 3
+  x: -10
+  y: -5
+  population: 40
+  nodes:
+  - {good: food, initial: 250, max_amount: 350, regen_per_hour: 4, base_rate: 0.7, stamina_cost: 5}
+  - {good: wood, initial: 250, max_amount: 350, regen_per_hour: 4, base_rate: 0.7, stamina_cost: 5}
+  workplaces:
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  houses: {count: 3}
+- name: City 4
+  x: 20
+  y: 10
+  population: 40
+  nodes:
+  - {good: food, initial: 250, max_amount: 350, regen_per_hour: 4, base_rate: 0.7, stamina_cost: 5}
+  - {good: wood, initial: 250, max_amount: 350, regen_per_hour: 4, base_rate: 0.7, stamina_cost: 5}
+  - good: wood
+    initial: 250
+    max_amount: 350
+    regen_per_hour: 4
+    base_rate: 0.7
+    stamina_cost: 5
+    at: [0, 0]
+  workplaces:
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  - {task: guard, wage: 2}
+  houses: {count: 3}
+roads:
+- {a: B, b: A}
+- {a: City 3, b: B}
+- {a: City 4, b: B}
+- {a: A, b: City 3}
