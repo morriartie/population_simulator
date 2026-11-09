@@ -1,0 +1,11 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+*.egg-info
+runs/
+docs/
+*.sqlite
+*.pkl
+.DS_Store

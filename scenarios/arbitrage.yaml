@@ -1,0 +1,7 @@
+# REQ-5.3: cities start isolated; a road opens on day 15 and merchants start
+# carrying wood from A to B.
+extends: baseline.yaml
+world_name: arbitrage
+
+events:
+  - {day: 15, type: add_road, a: A, b: B, hours: 8, stamina_cost: 20}

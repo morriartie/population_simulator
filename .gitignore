@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+runs/
+*.sqlite
+*.pkl
+# uv.lock is committed on purpose (REQ-1B.1)
+
+# secrets / local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# node / databases / build output
+node_modules/
+*.db
+dist/
+build/

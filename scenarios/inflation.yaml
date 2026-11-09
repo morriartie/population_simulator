@@ -1,0 +1,10 @@
+# REQ-5.2: a stimulus on day 20 moves treasury gold into every NPC's wallet.
+# The total money supply is unchanged; only its distribution changes.
+extends: baseline.yaml
+world_name: inflation
+
+money:
+  treasury_share: 0.5
+
+events:
+  - {day: 20, type: stimulus, city: all, per_npc: 60.0}

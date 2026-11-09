@@ -1,0 +1,80 @@
+# REQ-1B.3, REQ-1C.1
+#   docker compose up --build -d                       market API + dashboard → http://localhost:8000
+#   docker compose run --rm sim run scenarios/inflation.yaml --out runs/inflation
+#   docker compose --profile test run --rm test        test suite
+#   docker compose down                                stop (API data stays in the volume)
+name: popsim
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    image: popsim-api:latest
+    environment:
+      POPSIM_DB: /data/popsim_api.sqlite
+      POPSIM_PORT: "8080"
+    ports:
+      - "${POPSIM_HOST_PORT:-8080}:8080"
+    volumes:
+      - api-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  dashboard:
+    build:
+      context: .
+      target: sim
+    image: popsim-sim:latest
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      POPSIM_API_URL: http://api:8080
+      POPSIM_RUNS_DIR: /app/runs
+      POPSIM_SCENARIOS_DIR: /app/scenarios
+    ports:
+      - "${POPSIM_DASHBOARD_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./scenarios:/app/scenarios      # read-write: the dashboard saves scenarios here
+      - ./runs:/app/runs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  sim:
+    build:
+      context: .
+      target: sim
+    image: popsim-sim:latest
+    profiles: ["batch"]               # one-off runs: docker compose run --rm sim run <scenario>
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      POPSIM_API_URL: http://api:8080
+    volumes:
+      - ./scenarios:/app/scenarios:ro
+      - ./runs:/app/runs
+    command: ["run", "scenarios/arbitrage.yaml", "--out", "runs/arbitrage", "--save", "runs/arbitrage/end.pkl"]
+    restart: "no"
+
+  test:
+    build:
+      context: .
+      target: test
+    image: popsim-test:latest
+    profiles: ["test"]
+
+volumes:
+  api-data:

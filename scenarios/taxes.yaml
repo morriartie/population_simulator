@@ -1,0 +1,27 @@
+# REQ-5.5: taxes, public jobs and support. Policy is fixed for the run (no feedback).
+# Each city taxes and spends locally: A runs a guard post and a road crew, B only pays support.
+extends: baseline.yaml
+world_name: taxes
+
+fiscal:
+  income_tax: 0.10        # 10% of wages and of sales proceeds, to the treasury of the city where earned
+  sales_tax: 0.02         # 2% of each transaction's value, paid by the buyer
+  support:
+    amount: 4.0           # gold per day for residents with a survival need at or below its urgent level
+    hour: 8
+
+cities:
+  - name: A
+    population: 60
+    workplaces:
+      - {task: guard, wage: 3.0, slots: 4}
+      - {task: road_building, wage: 4.0, slots: 6, stamina_per_hour: 5}
+    nodes:
+      - {good: food, initial: 300, max_amount: 400, regen_per_hour: 5.0, base_rate: 0.7, stamina_cost: 5.0}
+      - {good: wood, initial: 300, max_amount: 400, regen_per_hour: 4.0, base_rate: 0.7, stamina_cost: 5.0}
+  - name: B
+    population: 60
+    fiscal: {income_tax: 0.20}      # B taxes more
+    nodes:
+      - {good: food, initial: 300, max_amount: 450, regen_per_hour: 6.0, base_rate: 0.7, stamina_cost: 5.0}
+      - {good: wood, initial: 20,  max_amount: 40,  regen_per_hour: 0.35, base_rate: 0.25, stamina_cost: 12.0}

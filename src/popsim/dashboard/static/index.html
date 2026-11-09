@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>popsim</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='10' cy='20' r='6' fill='%232F7D6D'/%3E%3Ccircle cx='23' cy='11' r='5' fill='%23C8902E'/%3E%3Cpath d='M10 20 23 11' stroke='%231F2A2E' stroke-width='2'/%3E%3C/svg%3E">
+</head>
+<body>
+  <nav class="rail" aria-label="Sections">
+    <a class="brand" href="#/runs">popsim</a>
+    <a href="#/runs" data-nav="runs">Runs</a>
+    <a href="#/compare" data-nav="compare">Compare</a>
+    <a href="#/scenarios" data-nav="scenarios">Scenarios</a>
+    <a href="#/market" data-nav="market">Market</a>
+    <a href="#/play" data-nav="play">Play <span class="live-dot" id="live-dot" hidden title="A live run is open"></span></a>
+  </nav>
+  <main id="main" tabindex="-1"></main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

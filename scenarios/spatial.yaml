@@ -1,0 +1,30 @@
+# Cities with coordinates (REQ-3A). Resource nodes, houses and workplaces have positions inside their
+# city, so people walk to work; the road A-B is 50 km long and its hours and stamina come from that.
+extends: default
+world_name: spatial
+
+cities:
+  - name: A
+    x: 0
+    y: 0
+    radius: 4                       # km; everything in the city lies within this distance of the centre
+    population: 60
+    houses: {count: 45}             # 45 houses for 60 people: 15 sleep outdoors and rest less well
+    workplaces:
+      - {task: guard, wage: 1.5, at: [1.0, 1.5]}      # a public job: paid by A's treasury, but with no tax or support set it pays from the starting treasury only
+    nodes:
+      - {good: food, initial: 300, max_amount: 400, regen_per_hour: 5.0, base_rate: 0.7, stamina_cost: 5.0, at: [3.0, 0.5]}
+      - {good: wood, initial: 300, max_amount: 400, regen_per_hour: 4.0, base_rate: 0.7, stamina_cost: 5.0, at: [-2.5, -2.0]}
+  - name: B
+    x: 30
+    y: 40
+    radius: 3
+    population: 60
+    houses: {count: 60}
+    nodes:                           # no positions given: placed at random inside the city, reproducibly
+      - {good: food, initial: 300, max_amount: 450, regen_per_hour: 6.0, base_rate: 0.7, stamina_cost: 5.0}
+      - {good: wood, initial: 20,  max_amount: 40,  regen_per_hour: 0.35, base_rate: 0.25, stamina_cost: 12.0}
+
+roads: []
+events:
+  - {day: 15, type: add_road, a: A, b: B}     # length 50 km (straight line), so 10 h and 25 stamina

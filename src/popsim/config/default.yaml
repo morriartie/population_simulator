@@ -1,0 +1,170 @@
+# popsim defaults. Rates are per in-game HOUR; systems scale them by
+# time.hours_per_tick. Gold amounts in config are in gold units; internally gold
+# is integer cents (money.unit per gold).
+
+seed: 42
+world_name: default
+
+time:
+  hours_per_tick: 1
+  days: 60
+
+goods: [food, wood]
+
+money:
+  unit: 100              # cents per gold
+  treasury_share: 0.15   # fraction of all gold that starts in city treasuries
+
+# Fixed system order per tick (REQ-1A.2). Systems that touch shared state
+# (ledger, market) always run in this order, so runs are deterministic.
+pipeline: [events, regeneration, physiology, needs, consumption, decision, action, market, aging, fiscal, metrics]
+
+npc:
+  gold: {mean: 60.0, sd: 15.0, min: 5.0}
+  inventory: {food: 3, wood: 2}
+  merchant_share: 0.10
+  merchant_gold_multiplier: 2.0
+  age_years: {mean: 35, sd: 10, min: 18, max: 65}
+  life_expectancy_years: {mean: 72, sd: 8, min: 50, max: 95}
+
+physiology:
+  stamina:
+    absolute_max: 100.0
+    awake_drain_per_hour: 2.0
+    sleep_restore_per_hour: 13.0
+    good_sleep_hours: 6.5             # less than this in a day counts as skipped sleep
+    deprivation_penalty_per_hour: 4.0 # daily_max lost per missing hour of sleep
+    recovery_per_streak_day: 1.5      # spring elasticity: +1.5 * streak per good day
+    min_daily_max: 25.0
+  metabolism:
+    base_burn_per_hour: 0.028
+    work_multiplier: 1.6
+    travel_multiplier: 1.8
+    sleep_multiplier: 0.6
+    satiety_per_food: 0.5
+  health:
+    base_sickness_per_hour: 0.0004
+    fatigue_sickness_factor: 12.0     # extra risk as daily_max falls
+    shelter_sickness_factor: 3.0      # extra risk when shelter is critical
+    immune: {mean: 0.6, sd: 0.1, min: 0.1, max: 0.95}
+    immune_drift_per_day: 0.03
+    recovery_per_hour: 0.02
+    recovery_sleep_bonus: 2.0
+    sick_work_efficiency: 0.5
+    sick_drain_multiplier: 1.5
+    sick_death_per_hour: 0.0002
+
+# MVP stand-in for housing upkeep (REQ-3.7 is deferred): the shelter need decays
+# and is refilled by burning/using wood.
+shelter:
+  decay_per_hour: 0.012
+  per_wood: 0.5
+  sleep_penalty_when_critical: 0.7    # sleep restores less stamina
+
+needs:
+  defaults:
+    food:    {comfort: 0.60, urgent: 0.35, critical: 0.15}
+    rest:    {comfort: 0.50, urgent: 0.25, critical: 0.10}
+    shelter: {comfort: 0.50, urgent: 0.25, critical: 0.10}
+    wealth:  {comfort: 1.00, urgent: 0.40, critical: 0.10}
+  threshold_sd: 0.05
+  urgency_exponent: 2.0
+  death_hours_at_zero: {food: 72}
+  savings_days: 5                     # wealth target = days of expected spending * thrift
+  daily_units: {food: 1.4, wood: 0.6} # used for budgets and stock targets
+
+traits:
+  risk:              {mean: 0.5, sd: 0.2, min: 0.0, max: 1.0}
+  urgency_tolerance: {mean: 0.5, sd: 0.2, min: 0.0, max: 1.0}
+  thrift:            {mean: 1.0, sd: 0.25, min: 0.3, max: 2.0}
+  luxury:            {mean: 0.5, sd: 0.2, min: 0.0, max: 1.0}
+  forecast_noise:    {mean: 0.05, sd: 0.03, min: 0.0, max: 0.3}
+  reactivity:        {mean: 1.0, sd: 0.3, min: 0.2, max: 2.5}
+  need_weight:       {mean: 1.0, sd: 0.2, min: 0.3, max: 2.0}
+  job_preference:    {mean: 0.0, sd: 0.3, min: -1.0, max: 1.0}
+  stock_days:        {mean: 2.0, sd: 0.7, min: 1.0, max: 4.0}
+
+skills: {sigma: 0.25, min: 0.4, max: 2.5}   # lognormal around 1.0, per good
+
+decision:
+  work_drive: 0.35
+  night_start: 22
+  night_end: 6
+  night_sleep_bonus: 0.8
+  night_work_factor: 0.5
+  shift_hours: 4
+  max_sleep_hours: 9
+  idle_score: 0.05
+  job_weights: {income: 1.0, preference: 0.2, skill: 0.2}
+  survival_food_job_bonus: 1.0        # starving + no food => gather food yourself
+  self_supply_weight: 0.8             # gather a need good yourself when the market fails you
+  work_hours_per_day: 8               # reservation wage = daily spend / these hours
+  starving_buy_patience: 0.3         # bid premium at which a starving NPC gives up buying and gathers
+
+# The player account of the Market tab (REQ-1C.9). Opened on demand, never by the scenario.
+# gold: exact opening balance in gold units; when null it is gold_share of the gold the citizens started with.
+player:
+  gold_share: 0.5
+  gold: null
+  goods: {}
+
+pricing:
+  ema_alpha_per_hour: 0.1
+  initial_prices: {food: 2.0, wood: 2.0}
+  bid_urgency_markup: 0.6
+  wealth_bid_elasticity: 0.25
+  wealth_bid_bounds: [0.8, 1.6]
+  max_unit_budget_share: [0.08, 0.5] # share of gold one unit may cost, by urgency
+  unit_budget_urgency_slope: 0.12
+  ask_wealth_markup: 0.15
+  ask_desperation: 0.3
+  adapt_step: 0.04
+  adapt_decay: 0.6
+  adapt_cap: 0.8
+  order_ttl_hours: 2
+
+merchant:
+  carry_capacity: 30
+  min_profit_gold: 3.0
+  stamina_value_gold: 0.05
+  sell_margin_safety: 0.10
+  max_buy_wait_hours: 6
+  max_sell_wait_hours: 24
+  budget_share: 0.7
+  scout: true
+  min_stamina_to_travel: 20.0
+
+cities: []
+roads: []
+events: []
+
+# Taxes and public spending (REQ-5.5). Policy is fixed per scenario; every city may override it with
+# its own `fiscal:` block. All zero by default, so a scenario without it has no taxes and no support.
+fiscal:
+  income_tax: 0.0         # share of wages and of sales proceeds, kept by the city where they are earned
+  sales_tax: 0.0          # share of each transaction's value, paid by the buyer to the city of the market
+  support:
+    amount: 0.0           # gold per day for each resident with a survival need at or below its urgent level
+    hour: 8               # hour of the day it is paid
+  public_jobs:
+    stamina_per_hour: 3.5 # default for workplaces: the effort of public work
+    slots: 3              # default number of people a workplace employs at once
+
+# Space and movement (REQ-3A). Distances are in abstract units (1 unit = 1 km). Speeds are
+# units per hour; stamina costs are per unit of distance.
+movement:
+  walk: {speed: 5.0, stamina_per_unit: 0.8}   # inside a city
+  road: {speed: 5.0, stamina_per_unit: 0.5}   # between cities: derives a road's hours and stamina_cost
+  arrival_radius: 0.05                        # an NPC is "at" a position within this distance
+  home_rest_multiplier: 1.25                  # sleeping in one's own house restores this much faster
+  default_city_radius: 2.0
+
+# Dashboard inspector (REQ-1C.5, REQ-1C.6). Recording only reads simulation state:
+# results are identical with it on or off. Turn it off to save memory.
+inspector:
+  record: true
+  buffer: 500            # entries kept per NPC for each of fills, actions, tasks, daily totals
+  dead_keep_days: 30     # how long a dead citizen stays inspectable
+
+output:
+  keep_ledger_log: true

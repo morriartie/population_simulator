@@ -1,0 +1,5 @@
+# Same economy as inflation.yaml (same treasury share) but no stimulus.
+# Compare the two runs to isolate the stimulus effect.
+extends: inflation.yaml
+world_name: inflation_control
+events: []

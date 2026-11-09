@@ -1,0 +1,18 @@
+# Two isolated cities. A is forested (cheap wood), B is a desert (scarce wood).
+extends: default
+world_name: twocities
+
+cities:
+  - name: A
+    population: 60
+    nodes:
+      - {good: food, initial: 300, max_amount: 400, regen_per_hour: 5.0, base_rate: 0.7, stamina_cost: 5.0}
+      - {good: wood, initial: 300, max_amount: 400, regen_per_hour: 4.0, base_rate: 0.7, stamina_cost: 5.0}
+  - name: B
+    population: 60
+    nodes:
+      - {good: food, initial: 300, max_amount: 450, regen_per_hour: 6.0, base_rate: 0.7, stamina_cost: 5.0}
+      - {good: wood, initial: 20,  max_amount: 40,  regen_per_hour: 0.35, base_rate: 0.25, stamina_cost: 12.0}
+
+roads: []
+events: []
