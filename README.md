@@ -17,6 +17,9 @@ popsim is an agent-based society simulation, written in pure Python on a custom 
 - **Strict conservation:** gold and goods are audited every day and by a full ledger replay at the end of each run.
 - **Scenarios in YAML:** cities, resources, roads, taxes, public jobs and events (stimulus, minting, new roads), with inheritance between files.
 - **Spatial worlds:** coordinates, houses, workplaces and walking time between places.
+
+  ![City map setup](images/city_map_setup.png)
+
 - **Web dashboard:** run viewer with map, scrubber and charts; citizen inspector; run comparison; scenario editor with a map editor; live play with pause, step and speed control.
 - **Player market:** trade by hand on a live world, with reproducible replays.
 - **Market REST API:** the market can run in-process or as a separate service backed by SQLite.
