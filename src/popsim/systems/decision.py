@@ -13,12 +13,12 @@ food); below critical, needs are weighed by per-NPC trait weights.
 from __future__ import annotations
 
 from popsim.components import Action, Location, MerchantState, Needs, Orders, Role, Skills, Stamina, Traits, Yield
-from popsim.components import Home, Workplace
+from popsim.components import Branch, Home, Workplace
 from popsim.records import set_reason
 from popsim.systems.agent import GOOD_NEED, job_options, reservation_wage, stock_target, work_stamina_per_tick
 from popsim.systems.fiscal import workers_at
 from popsim.systems.merchant import merchant_decide
-from popsim.systems.movement import cfg as movement_cfg, start_walk, walk_distance, walk_stamina
+from popsim.systems.movement import cfg as movement_cfg, start_trip, start_walk, walk_distance, walk_stamina
 
 
 class DecisionSystem:
@@ -172,6 +172,11 @@ class DecisionSystem:
             kind = "work" if public else "gather"
             if public and sim._wc is not None:
                 sim._wc[nid] = sim._wc.get(nid, 0) + 1  # the slot is taken from now on
+            if sim.world.get(nid, Branch) is not None:  # an overworld node: out along the roads (REQ-3A.11)
+                if act.target != nid:
+                    act.carry = 0.0
+                start_trip(sim, eid, act, city, nid, ticks)
+                return
             if walk_distance(sim, eid, nid) > 0:  # the plan is two steps: walk there, then work (REQ-3A.6)
                 start_walk(sim, eid, act, nid, (kind, nid, ticks))
                 return

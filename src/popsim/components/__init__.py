@@ -146,6 +146,30 @@ class Travel:
     ticks_left: int
     stamina_per_tick: float
     total_ticks: int = 0  # for placing the traveller along the road
+    from_pos: tuple[float, float] | None = None  # where the leg starts when it is not ``origin`` (a node, REQ-3A.11)
+
+
+@dataclass
+class Branch:
+    """A resource node on the overworld (REQ-3A.11): the main road (cities ``a`` and ``b``) it hangs off, how far
+    along it the junction lies (``t``, 0 at ``a``), and the branch road from the junction to the node."""
+
+    a: int
+    b: int
+    t: float
+    length: float
+    hours: float
+    stamina_cost: float
+    jx: float = 0.0  # the junction, for drawing
+    jy: float = 0.0
+
+
+@dataclass
+class Trip:
+    """A gathering trip out to an overworld node (REQ-3A.11): the city it started from and the node."""
+
+    origin: int
+    node: int
 
 
 # --------------------------------------------------------------------- AI (4.x)

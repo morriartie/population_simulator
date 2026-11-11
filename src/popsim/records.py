@@ -8,7 +8,7 @@ results with recording on or off (REQ-1.8).
 
 from __future__ import annotations
 
-from popsim.components import Action, House, Location, Record, Workplace, Yield
+from popsim.components import Action, Branch, House, Location, Record, Workplace, Yield
 
 
 def _rec(sim, eid: int) -> Record | None:
@@ -75,7 +75,8 @@ def _label(sim, act: Action) -> str | None:
     if act.kind == "gather":
         y = sim.world.get(act.target, Yield)
         loc = sim.world.get(act.target, Location)
-        where = sim.city_name(loc.city) if loc is not None and loc.city is not None else "?"
+        where = sim.city_name(loc.city) if loc is not None and loc.city is not None else (
+            "the overworld" if sim.world.get(act.target, Branch) is not None else "?")
         return f"{y.good} at {where}" if y is not None else None
     if act.kind == "travel":
         return f"to {sim.city_name(act.target)}"
@@ -108,7 +109,7 @@ def after_step(sim) -> None:
                 wp = sim.world.get(act.target, Workplace)
                 cur = {"node": act.target, "good": y.good if y else (wp.task if wp else None),
                        "city": sim.city_name(nloc.city) if nloc and nloc.city is not None
-                       else (sim.city_name(wp.city) if wp else None),
+                       else (sim.city_name(wp.city) if wp else ("overworld" if y else None)),
                        "start": t, "end": t, "units": rec.pending_units, "value": rec.pending_value}
                 rec.tasks.append(cur)
                 rec.cur_task = cur

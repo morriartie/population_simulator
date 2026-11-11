@@ -17,12 +17,14 @@ const NODE_FIELDS = [["initial", "Start stock"], ["max_amount", "Max stock"], ["
 const TOOLS = [["select", "Select", "Select and move things; drag the background to pan"],
   ["city", "City", "Click the map to place a city"],
   ["road", "Road", "Drag from one city to another"],
-  ["resource", "Resource", "Click inside a city to place a resource"],
-  ["workplace", "Workplace", "Click inside a city to place a workplace"],
-  ["house", "House", "Click inside a city to place a house"],
-  ["scatter", "Scatter", "Drag a circle inside a city to fill it with resources, workplaces or houses"]];
+  ["resource", "Add resource point", "Click outside the cities to place a resource point; it branches off the nearest road"],
+  ["workplace", "Add job", "Click inside a city to place a job"],
+  ["house", "Add house", "Click inside a city to place a house"],
+  ["eraser", "Eraser", "Click or drag to delete what is under the circle; tick below what it may delete"],
+  ["scatter", "Scatter", "Drag a circle to fill it: resource points on the overworld, jobs or houses inside a city"]];
+const PLACE_TOOLS = ["resource", "workplace", "house"];
 const HELPERS = [["arrange_cities", "Arrange cities"], ["connect_cities", "Connect cities"], ["fill_resources", "Fill in resources"],
-  ["fill_workplaces", "Fill in workplaces"], ["fill_houses", "Fill in houses"], ["remove_positions", "Remove positions"]];
+  ["fill_workplaces", "Fill in workplaces"], ["remove_positions", "Remove positions"]];
 
 function s(tag, attrs = {}, ...kids) {
   const e = document.createElementNS(NS, tag);
@@ -59,7 +61,10 @@ export class MapEditor {
     this.drag = null;
     this.rubber = null;         // { x, y } while drawing a road or scatter circle
     this.scatter = null;        // { ci, cx, cy, r } while dragging a scatter circle
-    this.opts = { good: null, task: "guard", wage: 2, kind: "resource", count: 8, richness: 1, nearest: 0, helperCount: 3 };
+    this.opts = { good: null, task: "guard", wage: 2, kind: "node", count: 8, richness: 1, nearest: 0, helperCount: 3,
+      eraserR: 1, erase: { ...M.DEFAULT_ERASE } };
+    this.cursor = null;         // the pointer in world km, for the placement ghost and the eraser circle
+    this.eraseSet = null;       // { map: key -> target, skipped } while an erase stroke is in progress
     this.confirm = null;        // { title, added, notes, apply } while a helper waits for a yes
     this.previewTimer = null;
     this.previewSeq = 0;
@@ -94,6 +99,7 @@ export class MapEditor {
     this.pendingRoad = null;
     this.scatter = null;
     this.confirm = null;
+    this.eraseSet = null;
     this.tool = "select";
   }
 
@@ -211,7 +217,7 @@ export class MapEditor {
   drawToolbar() {
     this.toolbar.replaceChildren(
       ...TOOLS.map(([id, label, title]) => h("button", { type: "button", class: "toggle", title, "aria-pressed": String(this.tool === id),
-        onclick: () => { this.tool = id; this.pendingRoad = null; this.scatter = null; this.drawChrome(); this.draw(); } }, label)),
+        onclick: () => { this.tool = this.tool === id && PLACE_TOOLS.includes(id) ? "select" : id; this.pendingRoad = null; this.scatter = null; this.eraseSet = null; this.drawChrome(); this.draw(); } }, label)),
       h("span", { class: "me-sep" }),
       h("button", { type: "button", disabled: !this.history.canUndo, onclick: () => this.undo(), title: "Undo (Ctrl+Z)" }, "Undo"),
       h("button", { type: "button", disabled: !this.history.canRedo, onclick: () => this.redo(), title: "Redo (Shift+Ctrl+Z)" }, "Redo"),
@@ -230,15 +236,23 @@ export class MapEditor {
       h("input", { type: "number", value: this.opts[key], ...props, onchange: (e) => { const v = toNum(e.target.value); if (v != null) this.opts[key] = v; } }));
     const kids = [];
     if (this.tool === "resource") kids.push(sel("Good", this.opts.good, goods.map((g) => [g, g]), (v) => { this.opts.good = v; }));
+    if (this.tool === "eraser") {
+      const setR = (v) => { if (v != null) { this.opts.eraserR = Math.min(50, Math.max(0.1, v)); this.drawOptions(); this.draw(); } };
+      kids.push(h("label", { class: "field" }, "Size (km)",
+        h("input", { type: "range", min: 0.1, max: 50, step: 0.1, value: this.opts.eraserR, "aria-label": "Eraser size", oninput: (e) => setR(toNum(e.target.value)), onchange: (e) => setR(toNum(e.target.value)) }),
+        h("input", { type: "number", min: 0.1, max: 50, step: "any", value: this.opts.eraserR, "aria-label": "Eraser size in km", onchange: (e) => setR(toNum(e.target.value)) })),
+        ...M.ERASE_KINDS.map(([k, label]) => h("label", { class: "field me-check" },
+          h("input", { type: "checkbox", checked: !!this.opts.erase[k], onchange: (e) => { this.opts.erase[k] = !!(e.target.checked ?? e.target.value); } }), label)));
+    }
     if (this.tool === "workplace") kids.push(
       h("label", { class: "field" }, "Task", h("input", { value: this.opts.task, onchange: (e) => { this.opts.task = e.target.value || "guard"; } })),
       num("Wage / h", "wage", { step: "any", min: 0 }));
     if (this.tool === "scatter") {
-      const what = this.opts.kind === "resource" ? sel("Good", this.opts.good, goods.map((g) => [g, g]), (v) => { this.opts.good = v; })
+      const what = this.opts.kind === "node" ? sel("Good", this.opts.good, goods.map((g) => [g, g]), (v) => { this.opts.good = v; })
         : this.opts.kind === "workplace" ? h("label", { class: "field" }, "Task", h("input", { value: this.opts.task, onchange: (e) => { this.opts.task = e.target.value || "guard"; } })) : "";
-      kids.push(sel("Fill with", this.opts.kind, [["resource", "Resources"], ["workplace", "Workplaces"], ["house", "Houses"]],
+      kids.push(sel("Fill with", this.opts.kind, [["node", "Resource points"], ["workplace", "Jobs"], ["house", "Houses"]],
         (v) => { this.opts.kind = v; this.drawOptions(); }), what, num("How many", "count", { min: 1, step: 1 }),
-      this.opts.kind === "resource" ? num("Richness", "richness", { min: 0.1, max: 10, step: 0.1 }) : "",
+      this.opts.kind === "node" ? num("Richness", "richness", { min: 0.1, max: 10, step: 0.1 }) : "",
       this.opts.kind === "workplace" ? num("Wage / h", "wage", { step: "any", min: 0 }) : "");
     }
     // helpers
@@ -254,7 +268,6 @@ export class MapEditor {
   helperParams(id) {
     if (id === "connect_cities") return { nearest: this.opts.nearest };
     if (id === "fill_workplaces") return { count: this.opts.helperCount, task: this.opts.task, wage: this.opts.wage };
-    if (id === "fill_houses") return { count: this.opts.helperCount };
     return {};
   }
 
@@ -286,8 +299,9 @@ export class MapEditor {
   }
 
   hasProblem(list, kind, a) {
+    if (kind === "ghouse") kind = "house";
     return list.some((p) => p.target.kind === kind && (kind === "road" ? (a.ri != null ? p.target.ri === a.ri : p.target.ei === a.ei)
-      : p.target.ci === a.ci && (kind === "city" || p.target.i === a.i)));
+      : kind === "node" ? p.target.oi === a.oi : p.target.ci === a.ci && (kind === "city" || p.target.i === a.i)));
   }
 
   draw() {
@@ -303,6 +317,10 @@ export class MapEditor {
     this.svg = svg;
     svg.addEventListener("wheel", (e) => { e.preventDefault(); const p = this.point(e); this.zoomBy(Math.exp(-e.deltaY * 0.0015), p.px, p.py); }, { passive: false });
     svg.addEventListener("pointermove", (e) => { if (!this.drag) this.onMove(e); });
+    svg.addEventListener("contextmenu", (e) => {   // a right click lets go of the armed tool
+      if (e.preventDefault) e.preventDefault();
+      if (PLACE_TOOLS.includes(this.tool) || this.tool === "eraser") { this.tool = "select"; this.eraseSet = null; this.drawChrome(); this.draw(); }
+    });
 
     // grid
     const step = this.step();
@@ -356,20 +374,33 @@ export class MapEditor {
     // houses, resources, workplaces
     const itemLayer = s("g");
     const itemEl = (it, shape) => {
-      const selected = this.sel && this.sel.kind === it.kind && this.sel.ci === it.ci && this.sel.i === it.i;
+      const selected = this.sel && this.sel.kind === it.kind && (it.kind === "node" ? this.sel.oi === it.oi : this.sel.ci === it.ci && this.sel.i === it.i);
       const bad = this.hasProblem(errors, it.kind, it), warn = this.hasProblem(warnings, it.kind, it);
       const x = this.sx(it.x), y = this.sy(it.y);
       const outline = bad ? madder : warn ? ochre : selected ? ink : null;
-      const label = it.kind === "resource" ? `${it.good} resource` : it.kind === "workplace" ? `${it.task} workplace` : "house";
-      const g = s("g", { class: `me-item${it.auto ? " auto" : ""}`, opacity: it.inherited ? 0.6 : it.auto ? 0.65 : 1, tabindex: 0, role: "button", "data-key": `${it.kind}:${it.ci}:${it.i}`,
+      const label = it.kind === "resource" ? `${it.good} resource` : it.kind === "node" ? `${it.good} resource point` : it.kind === "workplace" ? `${it.task} job`
+        : it.kind === "ghouse" ? "generated house" : "house";
+      const erasing = this.eraseSet && this.eraseSet.map.has(it.kind === "ghouse" ? "" : `${it.kind}:${it.kind === "node" ? it.oi : `${it.ci}:${it.i}`}`);
+      const g = s("g", { class: `me-item${it.auto ? " auto" : ""}${it.kind === "ghouse" ? " generated" : ""}`, opacity: erasing ? 0.35 : it.inherited ? 0.6 : it.auto || it.kind === "ghouse" ? 0.65 : 1, tabindex: 0, role: "button",
+        "data-key": it.kind === "node" ? `node:${it.oi}` : `${it.kind}:${it.ci}:${it.i}`,
         "aria-label": `${label}${it.auto ? ", automatic position" : ""}`,
-        onpointerdown: (e) => this.onItemDown(it, e), onkeydown: (e) => { if (e.key === "Enter") this.select({ kind: it.kind, ci: it.ci, i: it.i }); } });
+        onpointerdown: (e) => this.onItemDown(it, e), onkeydown: (e) => { if (e.key === "Enter") this.select(it.kind === "node" ? { kind: "node", oi: it.oi } : { kind: it.kind, ci: it.ci, i: it.i }); } });
       g.append(shape(x, y), s("title", {}, `${label}${it.auto ? " (automatic)" : ""}`));
       if (outline) g.append(s("circle", { cx: x, cy: y, r: 13, fill: "none", stroke: outline, "stroke-width": 2.5 }));
-      if (it.auto) g.append(s("text", { x, y: y + 22, "text-anchor": "middle", style: "font-size:10px", fill: ink3, "pointer-events": "none" }, "auto"));
+      if (erasing) g.append(s("circle", { cx: x, cy: y, r: 13, fill: "none", stroke: madder, "stroke-width": 3 }));
+      if (it.auto && it.kind !== "ghouse") g.append(s("text", { x, y: y + 22, "text-anchor": "middle", style: "font-size:10px", fill: ink3, "pointer-events": "none" }, "auto"));
       return g;
     };
-    for (const it of lay.houses) itemLayer.append(itemEl(it, (x, y) => s("rect", { x: x - 4, y: y - 4, width: 8, height: 8, fill: it.auto ? "none" : ink3, stroke: ink3, "stroke-width": 1.5 })));
+    // branch roads first, so the points sit on top of them
+    for (const n of lay.overNodes) {
+      if (!n.branch) continue;
+      const sel = this.sel && this.sel.kind === "node" && this.sel.oi === n.oi;
+      itemLayer.append(s("line", { x1: this.sx(n.branch.jx), y1: this.sy(n.branch.jy), x2: this.sx(n.x), y2: this.sy(n.y), stroke: sel ? ink : ink3,
+        "stroke-width": sel ? 3 : 1.5, "stroke-dasharray": "3 4", "pointer-events": "none", opacity: n.inherited ? 0.5 : 1 }));
+    }
+    for (const it of lay.houses) itemLayer.append(itemEl(it, (x, y) => s("rect", { x: x - 4, y: y - 4, width: 8, height: 8,
+      fill: it.kind === "ghouse" || it.auto ? "none" : ink3, stroke: ink3, "stroke-width": it.kind === "ghouse" ? 1 : 1.5 })));
+    for (const it of lay.overNodes) itemLayer.append(itemEl(it, (x, y) => s("circle", { cx: x, cy: y, r: 9, fill: col(it.good), "fill-opacity": 0.45, stroke: col(it.good), "stroke-width": 2.5 })));
     for (const it of lay.nodes) itemLayer.append(itemEl(it, (x, y) => s("circle", { cx: x, cy: y, r: 8, fill: col(it.good), "fill-opacity": 0.3, stroke: col(it.good), "stroke-width": 2 })));
     for (const it of lay.workplaces) itemLayer.append(itemEl(it, (x, y) => s("path", { d: `M${x} ${y - 8} l8 8 l-8 8 l-8 -8 z`, fill: "none", stroke: ink, "stroke-width": 2 })));
     svg.append(itemLayer);
@@ -382,13 +413,33 @@ export class MapEditor {
         onkeydown: (e) => { if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); this.edit((o, r) => M.setCityRadius(o, r, c.ci, c.radius + (e.key === "ArrowRight" ? 1 : -1) * this.step())); } } }));
     }
 
+    // junction handle of the selected resource point
+    if (this.sel && this.sel.kind === "node") {
+      const n = lay.overNodes[this.sel.oi];
+      if (n && n.branch) svg.append(s("circle", { cx: this.sx(n.branch.jx), cy: this.sy(n.branch.jy), r: 6, fill: ink, stroke: "white", "stroke-width": 2, class: "me-handle me-junction",
+        role: "slider", "aria-label": "Branch junction", tabindex: 0, "data-key": "junction", onpointerdown: (e) => { e.stopPropagation(); this.beginDrag(e, { type: "junction", oi: n.oi }); } }));
+    }
+
+    // the armed tool's ghost (red where the click would be refused) and the eraser circle
+    if (this.cursor && PLACE_TOOLS.includes(this.tool)) {
+      const q = this.snapPoint(this.cursor);
+      const inCity = lay.cities.find((c) => Math.hypot(q.x - c.x, q.y - c.y) <= c.radius);
+      const okHere = this.tool === "resource" ? !inCity : !!inCity;
+      svg.append(s("circle", { cx: this.sx(q.x), cy: this.sy(q.y), r: 9, fill: okHere ? ochre : madder, "fill-opacity": 0.25, stroke: okHere ? ochre : madder,
+        "stroke-width": 2, "stroke-dasharray": "3 3", class: "me-ghost", "pointer-events": "none" }));
+    }
+    if (this.cursor && this.tool === "eraser") {
+      svg.append(s("circle", { cx: this.sx(this.cursor.x), cy: this.sy(this.cursor.y), r: Math.max(3, this.opts.eraserR * this.view.k), fill: madder, "fill-opacity": 0.1,
+        stroke: madder, "stroke-width": 2, class: "me-eraser", "pointer-events": "none" }));
+    }
+
     // rubber band and scatter circle
     if (this.pendingRoad && this.rubber && byName[this.pendingRoad]) {
       const a = byName[this.pendingRoad];
       svg.append(s("line", { x1: this.sx(a.x), y1: this.sy(a.y), x2: this.sx(this.rubber.x), y2: this.sy(this.rubber.y), stroke: ink, "stroke-dasharray": "4 4", "pointer-events": "none" }));
     }
     if (this.scatter) {
-      const c = lay.cities[this.scatter.ci];
+      const c = this.scatter.ci < 0 ? { x: 0, y: 0 } : lay.cities[this.scatter.ci];
       svg.append(s("circle", { cx: this.sx(c.x + this.scatter.cx), cy: this.sy(c.y + this.scatter.cy), r: this.scatter.r * this.view.k, fill: ochre, "fill-opacity": 0.12,
         stroke: ochre, "stroke-width": 2, "pointer-events": "none" }));
     }
@@ -427,8 +478,9 @@ export class MapEditor {
 
   focusOn(t) {
     const lay = this.layout();
-    const it = t.kind === "city" ? lay.cities[t.ci] : t.kind === "road" ? null : lay[{ resource: "nodes", workplace: "workplaces", house: "houses" }[t.kind]].find((x) => x.ci === t.ci && x.i === t.i);
-    this.select(t.kind === "road" ? t : { kind: t.kind, ci: t.ci, i: t.i });
+    const it = t.kind === "city" ? lay.cities[t.ci] : t.kind === "road" ? null : t.kind === "node" ? lay.overNodes[t.oi]
+      : lay[{ resource: "nodes", workplace: "workplaces", house: "houses" }[t.kind]].find((x) => x.ci === t.ci && x.i === t.i && x.kind === t.kind);
+    this.select(t.kind === "road" || t.kind === "node" ? t : { kind: t.kind, ci: t.ci, i: t.i });
     if (it) { this.view.ox = W / 2 - it.x * this.view.k; this.view.oy = H / 2 + it.y * this.view.k; this.draw(); }
   }
 
@@ -470,8 +522,11 @@ export class MapEditor {
           const out = this.edit((o, r) => ({ ok: true, outside: M.setCityRadius(o, r, sel.ci, v == null ? M.defaultRadius(r) : v) }));
           if (out.outside && out.outside.length) toast(`${out.outside.length} item${out.outside.length > 1 ? "s are" : " is"} now outside ${c.name}; they are outlined in red.`, "error");
         }, { min: 0.1, placeholder: String(M.defaultRadius(st.resolved)) })),
-        field("Houses", Array.isArray(city.houses) ? h("span", { class: "muted" }, `${city.houses.length} listed (use the YAML tab or the map to move them)`)
-          : numIn(M.houseCount(city) || "", (v) => this.edit((o, r) => { const cc = M.ownList(o, r, "cities")[sel.ci]; if (v) cc.houses = { count: Math.min(M.MAX_HOUSES, Math.round(v)) }; else delete cc.houses; }), { min: 0, step: 1, placeholder: "none" })),
+        field("Houses (% of population)", numIn(city.housing_pct, (v) => {
+          const out = this.edit((o, r) => ({ ok: true, dropped: M.setHousingPct(o, r, sel.ci, v) }));
+          if (out.dropped) toast(`${out.dropped} moved house position${out.dropped > 1 ? "s were" : " was"} dropped: that city now has fewer generated houses.`, "error");
+        }, { min: 0, max: 1000, step: "any", placeholder: `${M.housingPct(city, st.resolved)} (scenario's)` }),
+          `${M.generatedHouses(city, st.resolved)} generated houses for ${city.population} people, plus ${M.houseCount(city)} placed by hand. 120 gives more houses than people, 80 fewer.`),
         h("h4", {}, "This city's tax policy"),
         field("Income tax", numIn(city.fiscal && city.fiscal.income_tax, (v) => set(["fiscal", "income_tax"], v), { min: 0, max: 0.95, step: 0.01, placeholder: "scenario's" })),
         field("Sales tax", numIn(city.fiscal && city.fiscal.sales_tax, (v) => set(["fiscal", "sales_tax"], v), { min: 0, max: 0.95, step: 0.01, placeholder: "scenario's" })),
@@ -503,10 +558,19 @@ export class MapEditor {
         }, { min: 0, placeholder: "open from the start" }), "Leave empty for a road that exists from day 0"),
         del("Delete road", () => { this.edit((o, r) => (sel.ei != null ? M.deleteEvent(o, r, sel.ei) : M.deleteRoad(o, r, sel.ri))); this.sel = null; this.draw(); this.drawPanel(); })];
     } else {
-      const list = { resource: lay.nodes, workplace: lay.workplaces, house: lay.houses }[sel.kind];
-      const it = list.find((x) => x.ci === sel.ci && x.i === sel.i);
+      if (sel.kind === "node") return this.drawNodePanel(lay);
+      const list = { resource: lay.nodes, workplace: lay.workplaces, house: lay.houses, ghouse: lay.houses }[sel.kind];
+      const it = list.find((x) => x.ci === sel.ci && x.i === sel.i && (sel.kind !== "house" && sel.kind !== "ghouse" || x.kind === sel.kind));
       if (!it) { this.sel = null; return this.drawPanel(); }
       const city = M.citiesOf(st.own, st.resolved)[sel.ci];
+      if (sel.kind === "ghouse") {
+        this.panel.replaceChildren(h("h3", {}, `Generated house in ${city.name}`), inh("cities"),
+          h("p", { class: "muted" }, "Its number follows the city's housing percentage, so it can be moved but not deleted."),
+          h("p", {}, `At ${fmt(it.x, 2)}, ${fmt(it.y, 2)} km${it.moved ? " (moved by hand)" : " (placed by the simulation)"}`),
+          it.moved ? h("button", { type: "button", onclick: () => this.edit((o, r) => { M.resetHouse(o, r, sel.ci, sel.i); }) }, "Put it back") : "");
+        return;
+      }
+      void list;
       const entry = sel.kind === "house" ? (Array.isArray(city.houses) ? city.houses[sel.i] : {}) : city[{ resource: "nodes", workplace: "workplaces" }[sel.kind]][sel.i];
       const setE = (k, v) => this.edit((o, r) => { const e = M.entryOf(o, r, sel.kind, sel.ci, sel.i); if (v === undefined) delete e[k]; else e[k] = v; });
       const goods = M.goodsOf(st.resolved);
@@ -531,6 +595,26 @@ export class MapEditor {
     this.panel.replaceChildren(...kids);
   }
 
+  drawNodePanel(lay) {
+    const st = this.st, sel = this.sel;
+    const n = lay.overNodes[sel.oi];
+    if (!n) { this.sel = null; return this.drawPanel(); }
+    const entry = M.worldNodesOf(st.own, st.resolved)[sel.oi];
+    const goods = M.goodsOf(st.resolved);
+    const setE = (k, v) => this.edit((o, r) => { const e = M.ownList(o, r, "nodes")[sel.oi]; if (v === undefined) delete e[k]; else e[k] = v; });
+    const field = (label, input, hint) => h("label", { class: "field" }, label, input, hint ? h("span", { class: "hint" }, hint) : "");
+    const numIn = (value, onchange, props = {}) => h("input", { type: "number", step: "any", value: value ?? "", ...props, onchange: (e) => onchange(toNum(e.target.value)) });
+    const where = n.branch ? `branch of the road ${n.branch.road[0]} to ${n.branch.road[1]}, ${fmt(n.branch.t * 100, 0)}% of the way from ${n.branch.road[0]}` : "no road to branch from yet";
+    this.panel.replaceChildren(h("h3", {}, `${entry.good} resource point`),
+      M.inherited(st.own, "nodes") ? h("p", { class: "hint" }, "Comes from the parent scenario. Editing it copies the parent's list into this scenario.") : "",
+      field("Good", h("select", { onchange: (e) => setE("good", e.target.value) }, goods.map((g) => h("option", { value: g, selected: g === entry.good }, g)))),
+      ...NODE_FIELDS.map(([k, label]) => field(label, numIn(entry[k], (v) => setE(k, v), { min: 0 }))),
+      h("p", { class: "muted" }, `At ${fmt(n.x, 2)}, ${fmt(n.y, 2)} km, on the ${where}. Drag the round handle on the road to move the junction.`),
+      field("Branch length (km)", numIn(entry.branch_length, (v) => setE("branch_length", v), { min: 0, placeholder: n.branch ? `${fmt(Math.hypot(n.x - n.branch.jx, n.y - n.branch.jy), 2)} (straight line)` : "" }),
+        "Longer than the straight line for a winding branch"),
+      h("button", { type: "button", class: "danger", onclick: () => { this.edit((o, r) => { M.deleteNode(o, r, sel.oi); }); this.sel = null; this.draw(); this.drawPanel(); } }, "Delete"));
+  }
+
   deleteCity(ci) {
     const st = this.st;
     const info = M.cascadeInfo(st.own, st.resolved, ci);
@@ -553,7 +637,14 @@ export class MapEditor {
       return;
     }
     if (this.tool === "road") { this.pendingRoad = null; this.draw(); return; }
-    if (["resource", "workplace", "house", "scatter"].includes(this.tool)) { toast("Click inside a city.", "error"); return; }
+    if (this.tool === "eraser") { this.startErase(e); return; }
+    if (this.tool === "resource") { this.placeNode(this.snapPoint(p)); return; }
+    if (this.tool === "scatter" && this.opts.kind === "node") {
+      this.scatter = { ci: -1, cx: p.x, cy: p.y, r: 0 };
+      this.beginDrag(e, { type: "scatter", ci: -1 });
+      return;
+    }
+    if (["workplace", "house", "scatter"].includes(this.tool)) { toast("Click inside a city.", "error"); return; }
     this.sel = null;
     this.beginDrag(e, { type: "pan", px: p.px, py: p.py, ox: this.view.ox, oy: this.view.oy });
     this.drawPanel();
@@ -572,8 +663,11 @@ export class MapEditor {
         if (!this.pendingRoad) { this.pendingRoad = c.name; this.rubber = { x: c.x, y: c.y }; this.draw(); }
         else this.finishRoad(c);
         break;
-      case "resource": case "workplace": case "house": this.placeItem(c, this.snapPoint(p)); break;
+      case "resource": toast("Resource points go outside the cities.", "error"); break;
+      case "eraser": this.startErase(e); break;
+      case "workplace": case "house": this.placeItem(c, this.snapPoint(p)); break;
       case "scatter": {
+        if (this.opts.kind === "node") { toast("Resource points go outside the cities.", "error"); break; }
         this.scatter = { ci: c.ci, cx: p.x - c.x, cy: p.y - c.y, r: 0 };
         this.beginDrag(e, { type: "scatter", ci: c.ci });
         break;
@@ -602,11 +696,64 @@ export class MapEditor {
     if (res.ok) { this.sel = { kind, ci: c.ci, i: res.i }; this.draw(); this.drawPanel(); }
   }
 
+  placeNode(q) {
+    const res = this.edit((o, r) => M.addNode(o, r, this.opts.good, q.x, q.y));
+    if (res.ok) { this.sel = { kind: "node", oi: res.oi }; this.draw(); this.drawPanel(); }
+  }
+
   onItemDown(it, e) {
     e.stopPropagation();
-    if (this.tool !== "select") { const c = this.layout().cities[it.ci]; this.onCityDown(c, e); return; }
-    this.sel = { kind: it.kind, ci: it.ci, i: it.i };
-    this.beginDrag(e, { type: "item", kind: it.kind, ci: it.ci, i: it.i });
+    if (this.tool === "eraser") { this.startErase(e); return; }
+    if (this.tool !== "select") {
+      if (it.kind === "node") { if (this.tool === "resource") this.placeNode(this.snapPoint(this.point(e))); return; }
+      const c = this.layout().cities[it.ci];
+      this.onCityDown(c, e);
+      return;
+    }
+    if (it.kind === "node") {
+      this.sel = { kind: "node", oi: it.oi };
+      this.beginDrag(e, { type: "item", kind: "node", oi: it.oi });
+    } else {
+      this.sel = { kind: it.kind, ci: it.ci, i: it.i };
+      this.beginDrag(e, { type: "item", kind: it.kind, ci: it.ci, i: it.i });
+    }
+    this.draw(); this.drawPanel();
+  }
+
+  // -- the eraser (REQ-1C.8) ---------------------------------------------------------
+  startErase(e) {
+    this.eraseSet = { map: new Map(), skipped: new Set() };
+    this.beginDrag(e, { type: "erase" });
+    this.eraseAt(this.point(e));
+    this.draw();
+  }
+
+  eraseAt(p) {
+    const { targets, skipped } = M.eraseTargets(this.layout(), { x: p.x, y: p.y, r: this.opts.eraserR }, this.opts.erase);
+    for (const t of targets) this.eraseSet.map.set(t.key, t);
+    for (const k of skipped) this.eraseSet.skipped.add(k);
+  }
+
+  finishErase() {
+    const set = this.eraseSet;
+    this.eraseSet = null;
+    if (!set) return;
+    const targets = [...set.map.values()];
+    const skipped = set.skipped.size;
+    if (!targets.length) { if (skipped) toast(`${skipped} generated house${skipped > 1 ? "s were" : " was"} left alone: their number follows the housing percentage.`); this.draw(); return; }
+    const st = this.st;
+    const cas = M.eraseCascade(st.own, st.resolved, targets);
+    if (cas.cities || cas.orphanedNodes) {
+      const parts = [cas.cities ? `${cas.cities} cit${cas.cities > 1 ? "ies" : "y"}` : "", cas.roads ? `${cas.roads} road${cas.roads > 1 ? "s" : ""}` : "",
+        cas.events ? `${cas.events} event${cas.events > 1 ? "s" : ""}` : "", cas.orphanedNodes ? `${cas.orphanedNodes} resource point${cas.orphanedNodes > 1 ? "s" : ""} left without a road` : ""].filter(Boolean);
+      const ok = typeof confirm === "function" ? confirm(`Erasing this also affects: ${parts.join(", ")}. Go on?`) : true;
+      if (!ok) { this.draw(); return; }
+    }
+    let done = {};
+    this.edit((o, r) => { done = M.applyErase(o, r, targets); });
+    this.sel = null;
+    const total = Object.values(done).reduce((a, b) => a + b, 0);
+    toast(`Erased ${total} item${total === 1 ? "" : "s"}${skipped ? `; ${skipped} generated house${skipped > 1 ? "s" : ""} left alone (their number follows the housing percentage)` : ""}.`);
     this.draw(); this.drawPanel();
   }
 
@@ -634,20 +781,25 @@ export class MapEditor {
     if (!this.svg) return;
     const p = this.point(e);
     if (this.readout) this.readout.textContent = `${fmt(p.x, 1)}, ${fmt(p.y, 1)} km`;
+    if (PLACE_TOOLS.includes(this.tool) || this.tool === "eraser") this.cursor = { x: p.x, y: p.y };
     if (this.pendingRoad) { this.rubber = { x: p.x, y: p.y }; if (!this.drag) this.draw(); }
+    else if (!this.drag && this.cursor && (PLACE_TOOLS.includes(this.tool) || this.tool === "eraser")) this.draw();
     const d = this.drag;
     if (!d) return;
     const st = this.st;
     const q = this.snapPoint(p);
     d.moved = true;
-    if (d.type === "pan") { this.view.ox = d.ox + (p.px - d.px); this.view.oy = d.oy + (p.py - d.py); }
+    if (d.type === "erase") { if (this.eraseSet) this.eraseAt(p); }
+    else if (d.type === "junction") M.moveJunction(st.own, st.resolved, d.oi, p.x, p.y);
+    else if (d.type === "pan") { this.view.ox = d.ox + (p.px - d.px); this.view.oy = d.oy + (p.py - d.py); }
     else if (d.type === "city") M.moveCity(st.own, st.resolved, d.ci, M.snap(p.x - d.dx, this.step()), M.snap(p.y - d.dy, this.step()));
     else if (d.type === "radius") {
       const c = M.citiesOf(st.own, st.resolved)[d.ci];
       M.setCityRadius(st.own, st.resolved, d.ci, Math.max(this.step(), M.snap(Math.hypot(p.x - Number(c.x), p.y - Number(c.y)), this.step())));
-    } else if (d.type === "item") M.moveItem(st.own, st.resolved, d.kind, d.ci, d.i, q.x, q.y);
-    else if (d.type === "scatter" && this.scatter) {
-      const c = M.citiesOf(st.own, st.resolved)[d.ci];
+    } else if (d.type === "item") {
+      if (d.kind === "node") M.moveNode(st.own, st.resolved, d.oi, q.x, q.y); else M.moveItem(st.own, st.resolved, d.kind, d.ci, d.i, q.x, q.y);
+    } else if (d.type === "scatter" && this.scatter) {
+      const c = d.ci < 0 ? { x: 0, y: 0 } : M.citiesOf(st.own, st.resolved)[d.ci];
       this.scatter.r = Math.max(0, Math.hypot(p.x - Number(c.x) - this.scatter.cx, p.y - Number(c.y) - this.scatter.cy));
     }
     this.draw();
@@ -658,13 +810,15 @@ export class MapEditor {
     this.drag = null;
     this.stopListening();
     if (!d) return;
+    if (d.type === "erase") { this.finishErase(); return; }
     if (d.type === "scatter") {
       const sc = this.scatter;
       this.scatter = null;
       this.draw();
       if (sc && sc.r > 0.05) {
-        const what = this.opts.kind === "resource" ? this.opts.good : this.opts.task;
-        this.helper("scatter", { city: M.citiesOf(this.st.own, this.st.resolved)[sc.ci].name, kind: this.opts.kind, what, count: this.opts.count,
+        const what = this.opts.kind === "node" ? this.opts.good : this.opts.task;
+        const city = sc.ci < 0 ? undefined : M.citiesOf(this.st.own, this.st.resolved)[sc.ci].name;
+        this.helper("scatter", { ...(city ? { city } : {}), kind: this.opts.kind, what, count: this.opts.count,
           center: [M.round2(sc.cx), M.round2(sc.cy)], radius: M.round2(sc.r), richness: this.opts.richness, wage: this.opts.wage }, "Scatter");
       }
       return;
@@ -682,7 +836,13 @@ export class MapEditor {
     if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); return; }
+    if (this.tool === "eraser" && (e.key === "[" || e.key === "]")) {
+      this.opts.eraserR = Math.min(50, Math.max(0.1, M.round2(this.opts.eraserR * (e.key === "]" ? 1.25 : 0.8))));
+      this.drawOptions(); this.draw();
+      return;
+    }
     if (e.key === "Escape") {
+      if (this.eraseSet) { this.eraseSet = null; this.drag = null; this.stopListening(); this.draw(); return; }
       if (this.confirm) { this.confirm = null; this.drawConfirm(); return; }
       if (this.pendingRoad || this.scatter) { this.pendingRoad = null; this.scatter = null; this.draw(); return; }
       this.tool = "select"; this.drawChrome(); this.draw(); return;
@@ -693,7 +853,11 @@ export class MapEditor {
       e.preventDefault();
       if (sel.kind === "city") this.deleteCity(sel.ci);
       else if (sel.kind === "road") { this.edit((o, r) => (sel.ei != null ? M.deleteEvent(o, r, sel.ei) : M.deleteRoad(o, r, sel.ri))); this.sel = null; this.draw(); this.drawPanel(); }
-      else { this.edit((o, r) => M.deleteItem(o, r, sel.kind, sel.ci, sel.i)); this.sel = null; this.draw(); this.drawPanel(); }
+      else if (sel.kind === "node") { this.edit((o, r) => { M.deleteNode(o, r, sel.oi); }); this.sel = null; this.draw(); this.drawPanel(); }
+      else {
+        const res = this.edit((o, r) => M.deleteItem(o, r, sel.kind, sel.ci, sel.i));
+        if (res.ok !== false) { this.sel = null; this.draw(); this.drawPanel(); }
+      }
       return;
     }
     const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
@@ -703,9 +867,12 @@ export class MapEditor {
     if (sel.kind === "city") {
       const c = lay.cities[sel.ci];
       this.edit((o, r) => M.moveCity(o, r, sel.ci, c.x + dir[0] * st, c.y + dir[1] * st));
+    } else if (sel.kind === "node") {
+      const it = lay.overNodes[sel.oi];
+      if (it) this.edit((o, r) => { M.moveNode(o, r, sel.oi, it.x + dir[0] * st, it.y + dir[1] * st); });
     } else {
-      const list = { resource: lay.nodes, workplace: lay.workplaces, house: lay.houses }[sel.kind];
-      const it = list.find((x) => x.ci === sel.ci && x.i === sel.i);
+      const list = { resource: lay.nodes, workplace: lay.workplaces, house: lay.houses, ghouse: lay.houses }[sel.kind];
+      const it = list.find((x) => x.ci === sel.ci && x.i === sel.i && x.kind !== undefined && (sel.kind === "house" || sel.kind === "ghouse" ? x.kind === sel.kind : true));
       if (it) this.edit((o, r) => { M.moveItem(o, r, sel.kind, sel.ci, sel.i, it.x + dir[0] * st, it.y + dir[1] * st); });
     }
     this.drawPanel();

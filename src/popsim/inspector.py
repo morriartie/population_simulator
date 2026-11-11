@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from popsim.components import (
     NPC, Action, Area, City, Demographics, Health, Home, House, Location, MerchantState, Metabolism,
-    Needs, Orders, Position, PriceMemory, Record, Role, Skills, Stamina, Traits, Travel, Workplace, Yield,
+    Needs, Orders, Position, PriceMemory, Record, Role, Skills, Stamina, Traits, Travel, Trip, Workplace, Yield,
 )
 from popsim.systems.fiscal import net_wage_per_hour, policy
 from popsim.systems.movement import at_home, distance_to, walk_distance, walk_stamina
@@ -264,11 +264,13 @@ def _jobs(sim, eid: int, loc: Location, act: Action, rec: Record | None) -> dict
     if act.kind == "gather" and act.target is not None:
         y = sim.world.get(act.target, Yield)
         nloc = sim.world.get(act.target, Location)
-        if y is not None and nloc is not None and nloc.city is not None:
+        trip = sim.world.get(eid, Trip)
+        price_city = nloc.city if nloc is not None and nloc.city is not None else (trip.origin if trip else None)
+        if y is not None and price_city is not None:
             avail = min(1.0, sim.ledger.balance(act.target, y.good) / 10.0)
-            per_stamina = price_ref(sim, eid, nloc.city, y.good) * skills.get(y.good, 1.0) * eff \
+            per_stamina = price_ref(sim, eid, price_city, y.good) * skills.get(y.good, 1.0) * eff \
                 / y.stamina_cost * avail
-            current = {"node": act.target, "good": y.good, "city": sim.city_name(nloc.city),
+            current = {"node": act.target, "good": y.good, "city": sim.city_name(nloc.city) if nloc.city is not None else "overworld",
                        "ticks_left": act.ticks_left,
                        "expected_income_per_stamina": _g(sim, per_stamina),
                        "node_stock": sim.ledger.balance(act.target, y.good),

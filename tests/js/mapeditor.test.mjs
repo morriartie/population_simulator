@@ -44,7 +44,7 @@ test("the map draws every city, road and item, and nothing else", () => {
   const label = byTag(byClass(ed.svg, "me-road")[0], "text")[0].textContent;
   assert.match(label, /40 km · 8 h · 20 st/);                          // derived from the straight line: 40 km at 5 km/h
   assert.match(byTag(byClass(ed.svg, "me-road")[1], "text")[0].textContent, /day 9/);
-  assert.equal(byClass(ed.toolbar, "toggle").length, 7);               // seven tools
+  assert.equal(byClass(ed.toolbar, "toggle").length, 8);               // eight tools, the eraser among them
 });
 
 test("dragging a city moves it as one undo step and keeps everything else", () => {
@@ -81,14 +81,15 @@ test("the radius handle resizes the selected city and reports what falls outside
   assert.equal(st.own.cities[0].nodes.length, 2);                      // the node outside is kept, not dropped
 });
 
-test("the City tool places a city with a node of every good, and selects it", () => {
+test("the City tool places a city that generates houses and has no nodes inside it, and selects it", () => {
   const { ed, st, log } = setup();
   tool(ed, "City");
   bgEl(ed).fire("pointerdown", at(ed, 20.3, 15.2));
   assert.equal(st.own.cities.length, 3);
   const c = st.own.cities[2];
   assert.equal(c.name, "City 3");
-  assert.deepEqual(c.nodes.map((n) => n.good), ["food", "wood"]);
+  assert.equal(c.nodes, undefined);                                    // resource points lie outside cities
+  assert.equal(c.housing_pct, 100);
   assert.equal(c.x, M.round2(M.snap(20.3, ed.step())));
   assert.deepEqual(ed.sel, { kind: "city", ci: 2 });
   assert.equal(log.edited, 1);
@@ -136,27 +137,196 @@ test("the road panel shows derived values, overrides them, and can make the road
   assert.equal(ed.sel, null);
 });
 
-test("resources, workplaces and houses are placed by clicking inside a city, and not outside", () => {
+test("jobs and houses are placed by clicking inside a city, resource points outside, and each refuses the other place", () => {
   const { ed, st } = setup();
-  tool(ed, "Resource");
+  st.own.roads = [{ a: "A", b: "B" }];
+  tool(ed, "Add resource point");
   byTag(ed.options, "select")[0].listeners.change[0]({ target: { value: "wood" } });
   cityEl(ed, 0).fire("pointerdown", at(ed, 3, 2));
-  const added = st.own.cities[0].nodes.at(-1);
+  assert.match(toastText(), /outside the cities/);
+  assert.equal(st.own.nodes, undefined);
+  bgEl(ed).fire("pointerdown", at(ed, 20, 12));
+  const added = st.own.nodes.at(-1);
   assert.equal(added.good, "wood");
-  assert.equal(added.at[0], M.round2(M.snap(3, ed.step())) - 0);
-  assert.deepEqual(ed.sel, { kind: "resource", ci: 0, i: 1 });
+  assert.deepEqual(added.at, [M.round2(M.snap(20, ed.step())), M.round2(M.snap(12, ed.step()))]);
+  assert.deepEqual(added.branch.road, ["A", "B"]);
+  assert.deepEqual(ed.sel, { kind: "node", oi: 0 });
+  assert.equal(ed.tool, "resource");                                   // the tool stays armed for more clicks
+  tool(ed, "Add job");
   bgEl(ed).fire("pointerdown", at(ed, 20, 20));
   assert.match(toastText(), /Click inside a city/);
-  assert.equal(st.own.cities[0].nodes.length, 2);
-  tool(ed, "Workplace");
   cityEl(ed, 1).fire("pointerdown", at(ed, 41, 1));
   assert.deepEqual(st.own.cities[1].workplaces[0].task, "guard");
-  tool(ed, "House");
+  tool(ed, "Add house");
   cityEl(ed, 1).fire("pointerdown", at(ed, 38, -1));
   assert.equal(st.own.cities[1].houses.length, 1);
   assert.ok(Array.isArray(st.own.cities[1].houses[0].at));
-  for (const city of st.own.cities) for (const kind of ["nodes", "workplaces", "houses"]) for (const it of city[kind] || [])
+  for (const city of st.own.cities) for (const kind of ["workplaces", "houses"]) for (const it of city[kind] || [])
     if (it.at) assert.ok(Math.hypot(...it.at) <= city.radius, "never outside its city");
+  tool(ed, "Add house");                                               // pressing the armed button again lets go of it
+  assert.equal(ed.tool, "select");
+});
+
+test("a resource point needs a road, a ghost shows where a click is allowed, and a right click disarms the tool", () => {
+  const { ed, st } = setup();
+  tool(ed, "Add resource point");
+  bgEl(ed).fire("pointerdown", at(ed, 20, 12));
+  assert.match(toastText(), /Draw a road first/);
+  assert.equal(st.own.nodes, undefined);
+  ed.svg.fire("pointermove", at(ed, 20, 12));
+  const ghost = byClass(ed.svg, "me-ghost")[0];
+  assert.ok(ghost, "the armed tool shows a ghost under the pointer");
+  assert.equal(ghost.attrs.stroke, "AMBER");
+  ed.svg.fire("pointermove", at(ed, 2, 1));                            // inside city A: a resource point is refused there
+  assert.equal(byClass(ed.svg, "me-ghost")[0].attrs.stroke, "RED");
+  ed.svg.fire("contextmenu", {});
+  assert.equal(ed.tool, "select");
+  assert.equal(byClass(ed.svg, "me-ghost").length, 0);
+});
+
+test("resource points are drawn on the overworld with their branch, move with their junction, and are deleted by key", () => {
+  const { ed, st } = setup();
+  st.own.roads = [{ a: "A", b: "B" }];
+  st.own.nodes = [{ ...node("wood"), at: [20, 10], branch: { road: ["A", "B"], t: 0.5 } }];
+  ed.draw();
+  const items = byClass(ed.svg, "me-item");
+  assert.ok(items.some((el) => el.attrs["data-key"] === "node:0"));
+  byClass(ed.svg, "me-item").find((el) => el.attrs["data-key"] === "node:0").fire("pointerdown", at(ed, 20, 10));
+  assert.deepEqual(ed.sel, { kind: "node", oi: 0 });
+  assert.match(ed.panel.textContent, /wood resource point/);
+  assert.ok(byClass(ed.svg, "me-junction")[0], "the selected point shows its junction handle");
+  window.fire("pointermove", at(ed, 30, 14));
+  window.fire("pointerup");
+  assert.deepEqual(st.own.nodes[0].at, [M.round2(M.snap(30, ed.step())), M.round2(M.snap(14, ed.step()))]);
+  byClass(ed.svg, "me-junction")[0].fire("pointerdown", at(ed, 20, 0));
+  window.fire("pointermove", at(ed, 10, 3));
+  window.fire("pointerup");
+  assert.equal(st.own.nodes[0].branch.t, 0.25);                         // 10 km along the 40 km road
+  ed.root.fire("keydown", { key: "Delete", target: ed.svg });
+  assert.deepEqual(st.own.nodes, []);
+  assert.equal(ed.sel, null);
+});
+
+test("generated houses follow the city's percentage, drag as overrides, and refuse deletion", () => {
+  const { ed, st } = setup();
+  st.own.cities[0].housing_pct = 50;                                    // 10 people: 5 houses
+  ed.draw();
+  assert.equal(byClass(ed.svg, "generated").length, 5);
+  const gh = byClass(ed.svg, "generated")[2];
+  gh.fire("pointerdown", at(ed, 0, 0));
+  assert.deepEqual(ed.sel, { kind: "ghouse", ci: 0, i: 2 });
+  assert.match(ed.panel.textContent, /Generated house in A/);
+  window.fire("pointermove", at(ed, 2, 1));
+  window.fire("pointerup");
+  assert.deepEqual(st.own.cities[0].house_positions, [{ index: 2, at: [M.round2(M.snap(2, ed.step())), M.round2(M.snap(1, ed.step()))] }]);
+  ed.root.fire("keydown", { key: "Delete", target: ed.svg });
+  assert.match(toastText(), /moved but not deleted/);
+  assert.deepEqual(ed.sel, { kind: "ghouse", ci: 0, i: 2 });
+  ed.select({ kind: "city", ci: 0 });
+  assert.match(ed.panel.textContent, /5 generated houses for 10 people/);
+  const pct = byTag(ed.panel, "input").find((i) => i.attrs.max === "1000");
+  pct.value = "20";                                                     // 2 houses: the moved house 2 no longer exists
+  pct.listeners.change[0]({ target: pct });
+  assert.equal(st.own.cities[0].housing_pct, 20);
+  assert.equal("house_positions" in st.own.cities[0], false);
+  assert.match(toastText(), /position was dropped/);
+});
+
+// ---------------------------------------------------------------- the eraser
+
+function eraserSetup() {
+  const r = setup();
+  r.st.own.roads = [{ a: "A", b: "B" }];
+  r.st.own.cities[0].workplaces = [{ task: "guard", wage: 1, at: [1, 1] }, { task: "guard", wage: 1, at: [-1, -1] }];
+  r.st.own.cities[0].houses = [{ at: [2, 0] }];
+  r.st.own.cities[0].housing_pct = 20;                                  // 2 generated houses
+  r.st.own.nodes = [{ ...node("food"), at: [20, 10], branch: { road: ["A", "B"], t: 0.5 } }, { ...node("wood"), at: [30, -10], branch: { road: ["A", "B"], t: 0.75 } }];
+  r.ed.draw();
+  return r;
+}
+
+test("the eraser has a size and a checkbox for each kind, with roads and cities off by default", () => {
+  const { ed } = eraserSetup();
+  tool(ed, "Eraser");
+  const boxes = findAll(ed.options, (n) => n.attrs && n.attrs.type === "checkbox");
+  assert.equal(boxes.length, 5);
+  assert.deepEqual(M.ERASE_KINDS.map((k) => k[1]), ["Houses", "Jobs", "Resource nodes", "Roads", "Cities"]);
+  assert.deepEqual(ed.opts.erase, { houses: true, jobs: true, resources: true, roads: false, cities: false });
+  assert.equal(findAll(ed.options, (n) => n.attrs && n.attrs.type === "range").length, 1);
+  ed.root.fire("keydown", { key: "]", target: ed.svg });
+  assert.equal(ed.opts.eraserR, 1.25);
+  ed.root.fire("keydown", { key: "[", target: ed.svg });
+  assert.ok(ed.opts.eraserR < 1.25 && ed.opts.eraserR >= 0.9);
+  ed.svg.fire("pointermove", at(ed, 20, 10));
+  const ring = byClass(ed.svg, "me-eraser")[0];
+  assert.equal(ring.attrs.r, String(Math.max(3, ed.opts.eraserR * ed.view.k)));
+});
+
+test("one eraser stroke deletes what it passes over, only for the ticked kinds, as one undo step", () => {
+  const { ed, st, log } = eraserSetup();
+  tool(ed, "Eraser");
+  ed.opts.eraserR = 1;
+  bgEl(ed).fire("pointerdown", at(ed, 20, 10));                           // over the food point
+  assert.equal(st.own.nodes.length, 2);                                   // nothing is deleted before the button is released
+  window.fire("pointermove", at(ed, 30, -10));                            // on to the wood point
+  window.fire("pointerup");
+  assert.deepEqual(st.own.nodes, []);
+  assert.equal(log.edited, 1);
+  assert.match(toastText(), /Erased 2 items/);
+  ed.undo();
+  assert.equal(st.own.nodes.length, 2);
+  ed.opts.erase.resources = false;                                        // unticked: the same stroke now leaves them alone
+  bgEl(ed).fire("pointerdown", at(ed, 20, 10));
+  window.fire("pointerup");
+  assert.equal(st.own.nodes.length, 2);
+});
+
+test("a big circle over a city erases its jobs and manual houses but leaves generated houses and the city", () => {
+  const { ed, st } = eraserSetup();
+  tool(ed, "Eraser");
+  ed.opts.eraserR = 6;
+  cityEl(ed, 0).fire("pointerdown", at(ed, 0, 0));
+  window.fire("pointerup");
+  assert.equal(st.own.cities[0].workplaces, undefined);
+  assert.equal(st.own.cities[0].houses, undefined);
+  assert.equal(st.own.cities.length, 2);
+  assert.match(toastText(), /Erased 4 items; 2 generated houses left alone/);
+  assert.equal(byClass(ed.svg, "generated").length, 2);
+});
+
+test("erasing cities or roads is off until ticked, and a city with roads asks before it goes", () => {
+  const { ed, st } = eraserSetup();
+  tool(ed, "Eraser");
+  ed.opts.eraserR = 3;
+  cityEl(ed, 1).fire("pointerdown", at(ed, 40, 0));
+  window.fire("pointerup");
+  assert.equal(st.own.cities.length, 2);                                   // cities unticked
+  ed.opts.erase.cities = true;
+  let asked = "";
+  globalThis.confirm = (m) => { asked = m; return false; };
+  cityEl(ed, 1).fire("pointerdown", at(ed, 40, 0));
+  window.fire("pointerup");
+  assert.match(asked, /1 city, 1 road/);
+  assert.match(asked, /2 resource points left without a road/);
+  assert.equal(st.own.cities.length, 2);                                   // declined: nothing happened
+  globalThis.confirm = () => true;
+  cityEl(ed, 1).fire("pointerdown", at(ed, 40, 0));
+  window.fire("pointerup");
+  assert.deepEqual(st.own.cities.map((c) => c.name), ["A"]);
+  assert.deepEqual(st.own.roads, []);
+});
+
+test("Escape cancels an erase stroke in progress and changes nothing", () => {
+  const { ed, st, log } = eraserSetup();
+  tool(ed, "Eraser");
+  bgEl(ed).fire("pointerdown", at(ed, 20, 10));
+  assert.ok(ed.eraseSet);
+  ed.root.fire("keydown", { key: "Escape", target: ed.svg });
+  assert.equal(ed.eraseSet, null);
+  window.fire("pointerup");
+  assert.equal(st.own.nodes.length, 2);
+  assert.equal(log.edited, 0);
+  assert.equal(ed.tool, "eraser");                                         // Esc only cancelled the stroke
 });
 
 test("an item cannot be dragged out of its city", () => {
@@ -192,6 +362,7 @@ test("automatic items are drawn faded at the preview position and can be placed 
 test("Scatter drags a circle in a city and asks the server, which shows what it would add", async () => {
   const { ed, st } = setup();
   tool(ed, "Scatter");
+  ed.opts.kind = "workplace";
   cityEl(ed, 0).fire("pointerdown", at(ed, 1, 0));
   window.fire("pointermove", at(ed, 3, 0));
   assert.ok(ed.scatter && ed.scatter.r > 1.9);
@@ -204,7 +375,7 @@ test("Scatter drags a circle in a city and asks the server, which shows what it 
   assert.equal(call.url, "/api/scenarios/helper");
   assert.equal(call.body.action, "scatter");
   assert.deepEqual({ city: call.body.params.city, kind: call.body.params.kind, what: call.body.params.what, count: call.body.params.count, center: call.body.params.center, radius: call.body.params.radius },
-    { city: "A", kind: "resource", what: "food", count: 8, center: [1, 0], radius: 2 });
+    { city: "A", kind: "workplace", what: "guard", count: 8, center: [1, 0], radius: 2 });
   assert.equal(st.own.cities[0].nodes.length, 1);                      // nothing changed yet: it asks first
   assert.match(ed.confirmHost.textContent, /scattered in a circle/);
   byText(ed.confirmHost, "button", "Cancel")[0].fire("click");
@@ -401,4 +572,21 @@ test("keyboard focus stays on the same item when the map is redrawn", () => {
   assert.ok(byClass(ed.svg, "me-city")[0] === document.activeElement);
   ed.root.fire("keydown", { key: "ArrowRight", target: document.activeElement });
   assert.equal(st.own.cities[0].x, M.round2(2 * ed.step()));            // so a second key press still works
+});
+
+test("Scatter of resource points is drawn on the overworld and sent with an absolute center and no city", async () => {
+  const { ed, st } = setup();
+  st.own.roads = [{ a: "A", b: "B" }];
+  tool(ed, "Scatter");
+  assert.equal(ed.opts.kind, "node");
+  cityEl(ed, 0).fire("pointerdown", at(ed, 1, 0));
+  assert.match(toastText(), /outside the cities/);
+  bgEl(ed).fire("pointerdown", at(ed, 20, 12));
+  window.fire("pointermove", at(ed, 23, 12));
+  env.net.respond = () => ({ data: M.clone(st.own), added: ["8 food nodes scattered in a circle of 3 km on the overworld"], notes: [] });
+  window.fire("pointerup");
+  await new Promise((r) => setTimeout(r, 5));
+  const params = env.net.calls.at(-1).body.params;
+  assert.deepEqual({ kind: params.kind, what: params.what, center: params.center, radius: params.radius, city: params.city },
+    { kind: "node", what: "food", center: [20, 12], radius: 3, city: undefined });
 });

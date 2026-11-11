@@ -164,7 +164,7 @@ def _num(errors, path, v, lo=None, hi=None, integer=False, lo_open=False):
 
 
 PATH_RE = re.compile(r"^([a-z_]+(?:\[\d+\])?(?:\.[a-z_]+(?:\[\d+\])?)*):")
-MAX_CITIES, MAX_NODES, MAX_WORKPLACES, MAX_HOUSES = 50, 200, 100, 5000
+MAX_CITIES, MAX_NODES, MAX_WORKPLACES, MAX_HOUSES, MAX_OVERWORLD_NODES = 50, 200, 100, 5000, 500
 
 
 def with_paths(messages: list[str]) -> list[dict]:
@@ -257,6 +257,8 @@ def validate(data: dict, scen_dir: Path, want_world: bool = False, full: bool = 
     if "home_rest_multiplier" in mv:
         _num(errors, "movement.home_rest_multiplier", mv["home_rest_multiplier"], 1)
 
+    if cfg.get("housing_pct") is not None:
+        _num(errors, "housing_pct", cfg["housing_pct"], 0, 1000)
     cities = cfg.get("cities") or []
     if isinstance(cities, list) and len(cities) > MAX_CITIES:
         errors.append(f"cities: at most {MAX_CITIES} cities (got {len(cities)})")
@@ -317,6 +319,24 @@ def validate(data: dict, scen_dir: Path, want_world: bool = False, full: bool = 
         else:
             errors.append(f"{p}.houses: must be a list of houses or {{count: N}}")
             house_n = 0
+        if c.get("housing_pct") is not None:
+            _num(errors, f"{p}.housing_pct", c["housing_pct"], 0, 1000)
+        pct = c.get("housing_pct", cfg.get("housing_pct", 0))
+        generated = 0
+        if isinstance(c.get("population"), int) and isinstance(pct, (int, float)) and not isinstance(pct, bool):
+            generated = max(0, int(c["population"] * pct / 100.0 + 0.5))
+        hp = c.get("house_positions") or []
+        if not isinstance(hp, list):
+            errors.append(f"{p}.house_positions: must be a list of {{index, at}}")
+        else:
+            for j, item in enumerate(hp):
+                q = f"{p}.house_positions[{j}]"
+                if not isinstance(item, dict) or not isinstance(item.get("index"), int) or isinstance(item.get("index"), bool) \
+                        or item["index"] < 0 or item["index"] >= generated:
+                    errors.append(f"{q}.index: must be the number of a generated house (0 to {max(generated - 1, 0)}); "
+                                  f"this city generates {generated}")
+                    continue
+                check_at(q, item)
         if isinstance(c.get("population"), int) and house_n > c["population"]:
             warnings.append(f"{p}: {house_n} houses for {c['population']} people; the extra houses stay empty")
         if c.get("fiscal") is not None:
@@ -353,7 +373,8 @@ def validate(data: dict, scen_dir: Path, want_world: bool = False, full: bool = 
             if isinstance(nd.get("initial"), (int, float)) and isinstance(nd.get("max_amount"), (int, float)) \
                     and nd["initial"] > nd["max_amount"]:
                 errors.append(f"{q}: initial ({nd['initial']}) exceeds max_amount ({nd['max_amount']})")
-        produced = {nd.get("good") for nd in c.get("nodes") or []}
+        produced = {nd.get("good") for nd in c.get("nodes") or []} | {
+            nd.get("good") for nd in cfg.get("nodes") or [] if isinstance(nd, dict)}
         for g in goods:
             if g not in produced:
                 warnings.append(f"cities[{i}]: city {n!r} has no {g} node, so it must import {g} or go without")
@@ -408,6 +429,85 @@ def validate(data: dict, scen_dir: Path, want_world: bool = False, full: bool = 
         if r.get("a") == r.get("b"):
             errors.append(f"{p}: a road needs two different cities")
         road_values(p, r)
+
+    # Resource nodes on the overworld (REQ-3A.11).
+    wnodes = cfg.get("nodes") or []
+    if not isinstance(wnodes, list):
+        errors.append("nodes: must be a list of resource nodes")
+        wnodes = []
+    if wnodes and not spatial:
+        errors.append("nodes: resource nodes outside cities need cities with coordinates")
+    if len(wnodes) > MAX_OVERWORLD_NODES:
+        errors.append(f"nodes: at most {MAX_OVERWORLD_NODES} resource nodes (got {len(wnodes)})")
+    circles = {}
+    for c in cities:
+        if isinstance(c, dict) and isinstance(c.get("x"), (int, float)) and isinstance(c.get("y"), (int, float)):
+            r = c.get("radius", default_r)
+            circles[c.get("name")] = (c["x"], c["y"], r if isinstance(r, (int, float)) else default_r)
+    known: list[tuple] = []
+    for r in list(cfg.get("roads") or []) + [e for e in cfg.get("events") or []
+                                              if isinstance(e, dict) and e.get("type") in ("add_road", "set_road")]:
+        if isinstance(r, dict) and (r.get("a"), r.get("b")) not in known and (r.get("b"), r.get("a")) not in known:
+            known.append((r.get("a"), r.get("b")))
+    for i, nd in enumerate(wnodes[:MAX_OVERWORLD_NODES]):
+        p = f"nodes[{i}]"
+        if not isinstance(nd, dict):
+            errors.append(f"{p}: must be a mapping")
+            continue
+        if nd.get("good") not in goods:
+            errors.append(f"{p}.good: must be one of {goods} (got {nd.get('good')!r})")
+        for key, lo, open_ in (("initial", 0, False), ("max_amount", 0, False), ("regen_per_hour", 0, False),
+                               ("base_rate", 0, True), ("stamina_cost", 0, True)):
+            _num(errors, f"{p}.{key}", nd.get(key, 0 if key == "initial" else None), lo, lo_open=open_)
+        if isinstance(nd.get("initial"), (int, float)) and isinstance(nd.get("max_amount"), (int, float)) \
+                and nd["initial"] > nd["max_amount"]:
+            errors.append(f"{p}: initial ({nd['initial']}) exceeds max_amount ({nd['max_amount']})")
+        at = nd.get("at")
+        at_ok = isinstance(at, (list, tuple)) and len(at) == 2 and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in at)
+        if at is not None and not at_ok:
+            errors.append(f"{p}.at: must be [x, y], absolute coordinates")
+        elif at_ok:
+            inside = [n for n, (cx, cy, cr) in circles.items() if ((at[0] - cx) ** 2 + (at[1] - cy) ** 2) ** 0.5 <= cr + 1e-9]
+            if inside:
+                errors.append(f"{p}.at: {list(at)} is inside {inside[0]!r}; resource nodes belong on the overworld, outside every city")
+        br = nd.get("branch")
+        road = None
+        if br is not None:
+            road = br.get("road") if isinstance(br, dict) else None
+            if not (isinstance(road, (list, tuple)) and len(road) == 2):
+                errors.append(f"{p}.branch.road: must be [city, city], two different cities")
+                road = None
+            elif road[0] == road[1]:
+                errors.append(f"{p}.branch.road: the two cities must be different")
+                road = None
+            elif any(x not in names for x in road):
+                bad = [x for x in road if x not in names]
+                errors.append(f"{p}.branch.road: unknown city {bad[0]!r} (cities: {', '.join(map(str, names))})")
+                road = None
+            t = br.get("t") if isinstance(br, dict) else None
+            _num(errors, f"{p}.branch.t", 0.5 if t is None else t, 0, 1)
+        if br is None and at is None:
+            errors.append(f"{p}: give a position (at) or a branch")
+        elif br is None and at_ok and spatial:
+            if not any(a in circles and b in circles for a, b in known):
+                errors.append(f"{p}.branch: there is no road to branch from; add a road between two cities first")
+        if nd.get("branch_length") is not None:
+            _num(errors, f"{p}.branch_length", nd["branch_length"], 0, lo_open=True)
+        for key in ("branch_hours", "branch_stamina_cost"):
+            if nd.get(key) is not None:
+                _num(errors, f"{p}.{key}", nd[key], 0, lo_open=(key == "branch_hours"))
+        if road and at_ok and spatial and road[0] in circles and road[1] in circles and isinstance(br, dict) \
+                and isinstance(br.get("t"), (int, float)) and isinstance(nd.get("branch_length"), (int, float)):
+            (x0, y0, _), (x1, y1, _) = circles[road[0]], circles[road[1]]
+            jx, jy = x0 + (x1 - x0) * br["t"], y0 + (y1 - y0) * br["t"]
+            straight_len = ((at[0] - jx) ** 2 + (at[1] - jy) ** 2) ** 0.5
+            if nd["branch_length"] < straight_len - 1e-9:
+                errors.append(f"{p}.branch_length: {nd['branch_length']} is below the straight-line distance {straight_len:.3f}")
+        if isinstance(nd, dict) and not nd.get("initial") and not nd.get("regen_per_hour"):
+            warnings.append(f"{p}: starts empty and never regrows, so no one can gather from it")
+        if road is not None and tuple(road) not in known and tuple(road)[::-1] not in known:
+            warnings.append(f"{p}.branch: there is no road between {road[0]} and {road[1]}, so the node cannot be reached")
 
     days = cfg.get("time", {}).get("days") or 0
     share = cfg.get("money", {}).get("treasury_share") or 0
@@ -495,9 +595,16 @@ def indexed_world(world: dict, cfg: dict) -> dict:
     """Mark each node, house and workplace with its city index and its place in that city's list, so the
     map editor can tell which scenario entry a position belongs to (they are built in list order)."""
     order = {c["name"]: i for i, c in enumerate(cfg.get("cities") or [])}
+    over = 0
+    for item in world["nodes"]:
+        if item.get("overworld"):
+            item["oi"] = over
+            over += 1
     for key in ("nodes", "houses", "workplaces"):
         seen: dict[str, int] = {}
         for item in world[key]:
+            if item.get("overworld"):
+                continue
             item["ci"] = order.get(item["city"])
             item["i"] = seen.get(item["city"], 0)
             seen[item["city"]] = item["i"] + 1

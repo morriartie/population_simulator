@@ -22,8 +22,7 @@ test("an inherited list is copied before it is edited, and the parent is untouch
   const res = M.addCity(own, r, 10.123, -5);
   assert.ok(res.ok);
   assert.equal(own.cities.length, 4);                       // the three inherited cities plus the new one
-  assert.deepEqual(own.cities[3], { name: "City 4", x: 10.12, y: -5, population: 40,
-    nodes: [{ good: "food", ...M.DEFAULT_NODE }, { good: "wood", ...M.DEFAULT_NODE }] });
+  assert.deepEqual(own.cities[3], { name: "City 4", x: 10.12, y: -5, population: 40, housing_pct: 100 });  // no nodes: they go outside cities
   assert.equal(r.cities.length, 3);                         // resolved (the parent's) is not modified
   assert.deepEqual(own.foo, { bar: 1 });                    // keys the editor does not know are kept
   assert.equal(M.inherited(own, "cities"), false);
@@ -198,4 +197,114 @@ test("the grid step is a round number of km", () => {
     assert.ok([1, 2, 5].includes(step / 10 ** Math.floor(Math.log10(step))), String(step));
     assert.ok(step * s >= 59 && step * s <= 61 * 2.5);
   }
+});
+
+
+// ------------------------------------------- housing, resource points and the eraser
+
+const spatial = () => {
+  const { own, resolved: r } = fresh();
+  r.cities[0].housing_pct = 100; r.cities[0].population = 10;
+  return { own, r };
+};
+
+test("a city generates round(population x pct / 100) houses; a city's pct beats the scenario's", () => {
+  assert.equal(M.generatedHouses({ population: 10, housing_pct: 120 }, {}), 12);
+  assert.equal(M.generatedHouses({ population: 10, housing_pct: 80 }, {}), 8);
+  assert.equal(M.generatedHouses({ population: 10 }, { housing_pct: 50 }), 5);
+  assert.equal(M.generatedHouses({ population: 10 }, {}), 0);          // no percentage anywhere: none
+  assert.equal(M.generatedHouses({ population: 5, housing_pct: 50 }, {}), 3);   // 2.5 rounds up, like the builder
+});
+
+test("generated houses are drawn first, can be moved but not deleted, and a lower pct drops stale positions", () => {
+  const { own, r } = spatial();
+  const lay = M.layoutOf(own, r, null);
+  assert.equal(lay.houses.filter((h) => h.kind === "ghouse").length, 10 + 0);
+  assert.equal(lay.houses.filter((h) => h.kind === "house").length, 3);       // the {count: 3} of the fixture
+  M.moveItem(own, r, "ghouse", 0, 4, 1, 1);
+  assert.deepEqual(own.cities[0].house_positions, [{ index: 4, at: [1, 1] }]);
+  assert.equal(M.layoutOf(own, r, null).houses.find((h) => h.kind === "ghouse" && h.i === 4).moved, true);
+  const res = M.deleteItem(own, r, "ghouse", 0, 4);
+  assert.equal(res.ok, false);
+  assert.equal(own.cities[0].house_positions.length, 1);
+  assert.equal(M.setHousingPct(own, r, 0, 30), 1);                             // 3 houses left: index 4 is gone
+  assert.equal("house_positions" in own.cities[0], false);
+  M.moveItem(own, r, "ghouse", 0, 1, 0.5, 0.5);
+  M.resetHouse(own, r, 0, 1);
+  assert.equal("house_positions" in own.cities[0], false);
+});
+
+test("a resource point is placed outside the cities and branches off the nearest road", () => {
+  const { own, r } = spatial();
+  let res = M.addNode(own, r, "wood", 1, 1);                                     // inside city A
+  assert.equal(res.ok, false);
+  assert.match(res.error, /outside the cities/);
+  res = M.addNode(own, r, "wood", 12, 8);
+  assert.ok(res.ok);
+  const n = own.nodes[res.oi];
+  assert.deepEqual(n.at, [12, 8]);
+  assert.deepEqual(n.branch.road, ["A", "B"]);
+  assert.ok(n.branch.t > 0 && n.branch.t < 1);
+  const lay = M.layoutOf(own, r, null);
+  assert.equal(lay.overNodes.length, 1);
+  assert.ok(Math.abs(lay.overNodes[0].branch.jy - n.branch.t * 40) < 1e-6);   // the junction is on the road A-B (x = 0.6 t... )
+  const noRoads = { own: { extends: "x" }, r: { ...M.clone(r), roads: [], events: [] } };
+  assert.match(M.addNode(noRoads.own, noRoads.r, "wood", 12, 8).error, /Draw a road first/);
+});
+
+test("moving a resource point keeps it out of cities and its branch follows; the junction slides to another road", () => {
+  const { own, r } = spatial();
+  const { oi } = M.addNode(own, r, "food", 12, 8);
+  M.moveNode(own, r, oi, 0.5, 0.5);                                               // dragged into city A: stops at its edge
+  const lay = M.layoutOf(own, r, null);
+  assert.ok(Math.hypot(lay.overNodes[0].x, lay.overNodes[0].y) > 4);
+  M.moveNode(own, r, oi, 45, 30);
+  assert.notDeepEqual(own.nodes[oi].branch.road, ["A", "B"]);                    // now nearer the other road
+  M.moveJunction(own, r, oi, 5, 20);
+  assert.deepEqual(own.nodes[oi].branch.road, ["A", "B"]);
+  M.deleteNode(own, r, oi);
+  assert.equal(own.nodes.length, 0);
+});
+
+test("the eraser hits only the kinds that are ticked, only inside its circle, and spares generated houses", () => {
+  const { own, r } = spatial();
+  M.addNode(own, r, "food", 12, 8);
+  M.addNode(own, r, "wood", 30, 20);
+  M.addItem(own, r, 0, "workplace", { task: "guard", wage: 1 }, [1, 0]);
+  const lay = M.layoutOf(own, r, null);
+  const at = lay.overNodes[0];
+  const circle = { x: at.x, y: at.y, r: 0.5 };
+  let hit = M.eraseTargets(lay, circle, { ...M.DEFAULT_ERASE });
+  assert.deepEqual(hit.targets.map((t) => t.key), ["node:0"]);                    // not the other node, not anything else
+  assert.deepEqual(M.eraseTargets(lay, circle, { ...M.DEFAULT_ERASE, resources: false }).targets, []);
+  hit = M.eraseTargets(lay, { x: 0, y: 0, r: 5 }, { ...M.DEFAULT_ERASE });       // all of city A
+  const kinds = new Set(hit.targets.map((t) => t.kind));
+  assert.ok(kinds.has("workplace") && kinds.has("house") && !kinds.has("city") && !kinds.has("road"));
+  assert.ok(hit.skipped.length > 0 && hit.skipped.every((k) => k.startsWith("ghouse:")));
+  assert.equal(M.eraseTargets(lay, { x: 5.5, y: 0, r: 0.4 }, { ...M.DEFAULT_ERASE }).targets.length, 0);   // just outside the circle
+  const road = M.eraseTargets(lay, { x: 15, y: 20, r: 1 }, { ...M.DEFAULT_ERASE, roads: true });
+  assert.deepEqual(road.targets.map((t) => t.key), ["road:0"]);                   // the line A-B passes through the circle
+  const city = M.eraseTargets(lay, { x: 0, y: 0, r: 1 }, { ...M.DEFAULT_ERASE, cities: true });
+  assert.ok(city.targets.some((t) => t.key === "city:0"));
+});
+
+test("applying an erase removes the right items whatever their order, and a city takes its roads with it", () => {
+  const { own, r } = spatial();
+  M.addNode(own, r, "food", 12, 8);
+  M.addNode(own, r, "wood", 30, 20);
+  M.addItem(own, r, 0, "workplace", { task: "a", wage: 1 }, [1, 0]);
+  M.addItem(own, r, 0, "workplace", { task: "b", wage: 1 }, [-1, 0]);
+  M.addItem(own, r, 0, "workplace", { task: "c", wage: 1 }, [0, 1]);
+  const targets = [{ kind: "workplace", ci: 0, i: 0 }, { kind: "workplace", ci: 0, i: 2 }, { kind: "node", oi: 0 }];
+  const done = M.applyErase(own, r, targets);
+  assert.deepEqual(own.cities[0].workplaces.map((w) => w.task), ["b"]);
+  assert.deepEqual(own.nodes.map((n) => n.good), ["wood"]);
+  assert.deepEqual(done, { workplace: 2, node: 1 });
+  const cas = M.eraseCascade(own, r, [{ kind: "city", ci: 1 }]);
+  assert.equal(cas.cities, 1);
+  assert.ok(cas.roads >= 2 && cas.events >= 1);
+  M.applyErase(own, r, [{ kind: "city", ci: 1 }]);
+  assert.deepEqual(own.cities.map((c) => c.name), ["A", "C"]);
+  assert.ok(own.roads.every((rd) => rd.a !== "B" && rd.b !== "B"));
+  assert.equal(M.eraseCascade(own, r, [{ kind: "workplace", ci: 0, i: 0 }]).cities, 0);
 });

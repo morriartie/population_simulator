@@ -1,0 +1,20 @@
+# Resource points on the overworld (REQ-3A.11) and houses from a percentage (REQ-3.7).
+# Nothing is gathered inside a city: citizens walk out along the road A-B to a junction, then along a
+# branch road to the node, work, and come back to sell in a city. Houses are generated per city:
+# round(population * housing_pct / 100), here 120% in A (spare houses) and 80% in B (some sleep outdoors).
+extends: default
+world_name: overworld
+housing_pct: 100                    # default for every city; a city can override it
+
+cities:
+  - {name: A, x: 0, y: 0, radius: 4, population: 60, housing_pct: 120}
+  - {name: B, x: 30, y: 40, radius: 3, population: 60, housing_pct: 80}
+
+roads:
+  - {a: A, b: B}                    # 50 km, so 10 h and 25 stamina each way
+
+nodes:
+  - {good: food, at: [10, 2],  branch: {road: [A, B], t: 0.15}, initial: 300, max_amount: 400, regen_per_hour: 5.0, base_rate: 0.7, stamina_cost: 5.0}
+  - {good: wood, at: [-6, 20], branch: {road: [A, B], t: 0.4},  initial: 300, max_amount: 400, regen_per_hour: 4.0, base_rate: 0.7, stamina_cost: 5.0}
+  - {good: food, at: [34, 30], branch: {road: [A, B], t: 0.85}, initial: 300, max_amount: 450, regen_per_hour: 6.0, base_rate: 0.7, stamina_cost: 5.0}
+  - {good: wood, at: [20, 38],                                   initial: 20,  max_amount: 40,  regen_per_hour: 0.35, base_rate: 0.25, stamina_cost: 12.0}   # no branch given: the nearest road is used

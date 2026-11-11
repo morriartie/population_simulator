@@ -96,6 +96,15 @@ def world_layout(sim) -> dict:
         cities.append({"name": name, **at(cid), "radius": area.radius if area else 0.0})
     nodes = [{"id": nid, "city": sim.city_name(cid), "good": sim.world.get(nid, Yield).good, **at(nid)}
              for cid, ids in sorted(sim.nodes_by_city.items()) for nid in ids]
+    from popsim.components import Branch
+
+    for nid in getattr(sim, "overworld_nodes", []):
+        br = sim.world.get(nid, Branch)
+        nodes.append({"id": nid, "city": None, "overworld": True, "good": sim.world.get(nid, Yield).good,
+                      **at(nid), "branch": {"a": sim.city_name(br.a), "b": sim.city_name(br.b), "t": br.t,
+                                            "jx": round(br.jx, 4), "jy": round(br.jy, 4),
+                                            "length": round(br.length, 4), "hours": round(br.hours, 4),
+                                            "stamina_cost": round(br.stamina_cost, 4)}})
     houses = [{"id": eid, "city": sim.city_name(h.city), "occupant": h.occupant, **at(eid)}
               for eid, (h,) in sim.world.query(House)]
     workplaces = [{"id": eid, "city": sim.city_name(w.city), "task": w.task, "wage": w.wage / sim.unit, **at(eid)}

@@ -126,6 +126,7 @@ container, make it writable for the container user.
 
 | `taxes.yaml` | Income and sales tax, public jobs paid by the city treasury, a daily support payment; city B taxes at its own rate. |
 | `spatial.yaml` | Cities with coordinates, houses and nodes at positions. People walk to work and home; the road A–B is derived from the distance. |
+| `overworld.yaml` | Resource points outside the cities on branch roads, and houses generated from a percentage of the population (120% in one city, 80% in the other). |
 
 Scenario files `extends:` another file (or `default`) and override any key. Events: `stimulus`,
 `mint` (the only way to create gold), `add_road`/`set_road`, `remove_road`, timed by `day` (+`hour`) or `tick`.

@@ -37,6 +37,7 @@ class Simulation:
         self.market: MarketClient = market or LocalMarketClient()
         self.city_ids: dict[str, int] = {}
         self.nodes_by_city: dict[int, list[int]] = {}
+        self.overworld_nodes: list[int] = []  # resource nodes outside every city (REQ-3A.11)
         self.workplaces_by_city: dict[int, list[int]] = {}  # public jobs (REQ-5.5)
         self.board: dict[int, dict] = {}  # city -> good -> {"bid","ask"} (top of book)
         self.event_log: list[dict] = []
@@ -103,6 +104,26 @@ class Simulation:
             if {road.a, road.b} == {a, b}:
                 return rid, road
         return None
+
+    def nodes_for(self, city: int) -> list[int]:
+        """The resource nodes a citizen of ``city`` can work: the ones inside the city (scenarios before
+        REQ-3A.11) and the overworld nodes on a road that touches it, while that road exists."""
+        from popsim.components import Branch
+
+        out = list(self.nodes_by_city.get(city, []))
+        for nid in self.overworld_nodes:
+            br = self.world.get(nid, Branch)
+            if br is not None and city in (br.a, br.b) and self.find_road(br.a, br.b) is not None:
+                out.append(nid)
+        return out
+
+    def nodes_of(self, city: int) -> list[int]:
+        """Nodes whose stock is booked to ``city`` in the daily table: the ones inside it, and the
+        overworld nodes whose main road starts at it (each overworld node is counted once)."""
+        from popsim.components import Branch
+
+        return list(self.nodes_by_city.get(city, [])) + [
+            n for n in self.overworld_nodes if getattr(self.world.get(n, Branch), "a", None) == city]
 
     def npcs_in(self, city: int) -> list[int]:
         return [eid for eid, (_, loc) in self.world.query(NPC, Location) if loc.city == city]
@@ -213,6 +234,7 @@ class Simulation:
         self.__dict__.setdefault("spatial", False)
         self.__dict__.setdefault("pos_rng", None)
         self.__dict__.setdefault("workplaces_by_city", {})
+        self.__dict__.setdefault("overworld_nodes", [])
         self.__dict__.setdefault("graveyard", {})  # snapshots written before the inspector
         self.__dict__.setdefault("player", None)
         self.__dict__.setdefault("npc_gold_start", None)

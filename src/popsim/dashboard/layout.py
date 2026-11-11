@@ -18,7 +18,7 @@ from pathlib import Path
 
 from popsim.config import resolve
 
-MAX_CITIES, MAX_NODES, MAX_WORKPLACES, MAX_HOUSES = 50, 200, 100, 5000
+MAX_CITIES, MAX_NODES, MAX_WORKPLACES, MAX_HOUSES, MAX_OVERWORLD_NODES = 50, 200, 100, 5000, 500
 DEFAULT_NODE = {"initial": 250, "max_amount": 350, "regen_per_hour": 4.0, "base_rate": 0.7, "stamina_cost": 5.0}
 HELPERS = ("arrange_cities", "connect_cities", "fill_resources", "fill_workplaces", "fill_houses",
            "scatter", "remove_positions")
@@ -191,10 +191,80 @@ def _check_room(c: dict, key: str, extra: int, cap: int, label: str) -> None:
         raise HelperError(f"{c.get('name')} would have {have + extra} {label}; at most {cap} are allowed")
 
 
+def _spatial(cities: list) -> bool:
+    return bool(cities) and all(_has_xy(c) for c in cities)
+
+
+def _overworld_context(own: dict, resolved: dict):
+    """What the overworld helpers need: city centres and radii by name, and the roads a node can hang off."""
+    from popsim.world.builder import known_roads
+
+    cities = _own_list(own, resolved, "cities")
+    cxy = {c["name"]: (float(c["x"]), float(c["y"])) for c in cities if _has_xy(c)}
+    default_r = _default_radius(resolved)
+    circles = [(float(c["x"]), float(c["y"]), float(c.get("radius", default_r))) for c in cities if _has_xy(c)]
+    cfg = {"roads": [*(own.get("roads") if own.get("roads") is not None else resolved.get("roads") or [])],
+           "events": resolved.get("events") or []}
+    return cities, cxy, circles, known_roads(cfg), cfg
+
+
+def _node_road(node: dict, cxy: dict, cfg: dict):
+    """The (a, b) road an overworld node hangs off: its own ``branch``, or the nearest road to ``at``."""
+    from popsim.world.builder import nearest_junction
+
+    br = node.get("branch") or {}
+    if br.get("road"):
+        return tuple(br["road"])
+    at = node.get("at")
+    if at is None:
+        return None
+    found = nearest_junction(cfg, cxy, (float(at[0]), float(at[1])))
+    return None if found is None else (found[0], found[1])
+
+
+def _fill_overworld(own: dict, resolved: dict, goods: list) -> tuple[list[str], list[str]]:
+    """Give every city access to a node of each good it lacks: a new node on a branch of one of its roads
+    (REQ-1C.8 Fill in resources). A node is shared by both cities of its road."""
+    from popsim.world.builder import beside_junction
+
+    cities, cxy, circles, roads, cfg = _overworld_context(own, resolved)
+    nodes = own.setdefault("nodes", copy.deepcopy(resolved.get("nodes") or []))
+    added: list[str] = []
+    notes: list[str] = []
+    for c in cities:
+        name = c["name"]
+        reach = {n.get("good") for n in c.get("nodes") or []}
+        for nd in nodes:
+            road = _node_road(nd, cxy, cfg)
+            if road and name in road:
+                reach.add(nd.get("good"))
+        mine = [r for r in roads if name in r]
+        for g in goods:
+            if g in reach:
+                continue
+            if not mine:
+                notes.append(f"{name} has no road, so no resource node can be placed for it.")
+                break
+            if len(nodes) >= MAX_OVERWORLD_NODES:
+                raise HelperError(f"at most {MAX_OVERWORLD_NODES} resource nodes are allowed")
+            a, b = mine[0]
+            on_road = sum(1 for nd in nodes if _node_road(nd, cxy, cfg) in ((a, b), (b, a)))
+            t = round(min(0.9, 0.5 + 0.06 * on_road), 3)
+            at = [round(v, 2) for v in beside_junction(cfg, circles, cxy[a], cxy[b], t)]
+            nodes.append({"good": g, **DEFAULT_NODE, "at": at, "branch": {"road": [a, b], "t": t}})
+            reach.add(g)
+            added.append(f"{name}: a {g} node on the road {a} to {b}")
+    return added, notes + ([] if added else ["Every city already has access to every good."])
+
+
 def fill_resources(own: dict, resolved: dict, params: dict) -> tuple[list[str], list[str]]:
-    """One node of every good a city lacks, with default stats and an automatic position."""
+    """One node of every good a city lacks, with default stats. In a scenario with coordinates the node
+    goes on the overworld, on a branch of one of the city's roads; without coordinates it stays in the
+    city, as before."""
     goods = list(resolved.get("goods") or [])
     cities = _own_list(own, resolved, "cities")
+    if _spatial(cities):
+        return _fill_overworld(own, resolved, goods)
     added: list[str] = []
     for c in cities:
         have = {n.get("good") for n in c.get("nodes") or []}
@@ -273,12 +343,64 @@ def scatter_points(seed_key: str, cx: float, cy: float, radius: float, count: in
     return [(_round(x), _round(y)) for x, y in pts]
 
 
+def _scatter_overworld(own: dict, resolved: dict, params: dict) -> tuple[list[str], list[str]]:
+    """Resource nodes in a circle on the overworld (absolute center), each outside every city and branching
+    from the road nearest to it (REQ-1C.8 Scatter)."""
+    cities, cxy, circles, roads, cfg = _overworld_context(own, resolved)
+    if not _spatial(cities):
+        raise HelperError("give the cities positions first (Arrange cities)")
+    if not roads:
+        raise HelperError("there is no road to branch from; add a road first")
+    good = params.get("what")
+    if good not in (resolved.get("goods") or []):
+        raise HelperError(f"what must be one of {resolved.get('goods')}")
+    nodes = own.setdefault("nodes", copy.deepcopy(resolved.get("nodes") or []))
+    count = _num(params, "count", 5, lo=1, hi=MAX_OVERWORLD_NODES, integer=True)
+    if len(nodes) + count > MAX_OVERWORLD_NODES:
+        raise HelperError(f"the world would have {len(nodes) + count} resource nodes; at most {MAX_OVERWORLD_NODES} are allowed")
+    radius = _num(params, "radius", lo=0.01)
+    center = params.get("center")
+    if not (isinstance(center, (list, tuple)) and len(center) == 2 and all(isinstance(v, (int, float)) for v in center)):
+        raise HelperError("center must be [x, y]")
+    richness = _num(params, "richness", 1.0, lo=0.1, hi=10.0)
+    rng = random.Random(f"scatter-node:{good}:{center[0]:.3f}:{center[1]:.3f}:{radius:.3f}:{count}")
+    spacing = 0.6 * radius / math.sqrt(count)
+    pts: list[tuple[float, float]] = []
+    for _ in range(count):
+        best = None
+        for _try in range(60):
+            r = radius * math.sqrt(rng.random())
+            a = rng.random() * 2 * math.pi
+            x, y = center[0] + r * math.cos(a), center[1] + r * math.sin(a)
+            if any(math.hypot(x - cx, y - cy) <= cr + 1e-6 for cx, cy, cr in circles):
+                continue
+            best = (x, y)
+            if all(math.hypot(x - px, y - py) >= spacing for px, py in pts):
+                break
+        if best is None:
+            raise HelperError("the area lies inside cities; resource nodes belong outside them")
+        pts.append(best)
+    stats = {k: (v * richness if k in ("initial", "max_amount", "regen_per_hour") else v) for k, v in DEFAULT_NODE.items()}
+    stats["initial"], stats["max_amount"] = round(stats["initial"]), round(stats["max_amount"])
+    stats["regen_per_hour"] = round(stats["regen_per_hour"], 2)
+    from popsim.world.builder import nearest_junction
+
+    for x, y in pts:
+        at = [_round(x), _round(y)]
+        found = nearest_junction(cfg, cxy, (at[0], at[1]))
+        nodes.append({"good": good, **stats, "at": at,
+                      "branch": {"road": [found[0], found[1]], "t": _round(found[2])}})
+    return [f"{count} {good} nodes scattered in a circle of {radius:g} km on the overworld"], []
+
+
 def scatter(own: dict, resolved: dict, params: dict) -> tuple[list[str], list[str]]:
     """Fill a circle inside a city with resource nodes, workplaces or houses (REQ-1C.8). The area is a
     way of authoring: the scenario stores the individual items."""
     kind = params.get("kind")
-    if kind not in ("resource", "workplace", "house"):
-        raise HelperError("kind must be resource, workplace or house")
+    if kind not in ("resource", "workplace", "house", "node"):
+        raise HelperError("kind must be resource, workplace, house or node")
+    if kind == "node":
+        return _scatter_overworld(own, resolved, params)
     cities = _own_list(own, resolved, "cities")
     city = cities[_city_index(cities, params.get("city"))]
     if not _has_xy(city):
@@ -327,6 +449,8 @@ def remove_positions(own: dict, resolved: dict, params: dict) -> tuple[list[str]
     cities = _own_list(own, resolved, "cities")
     if not any(_has_xy(c) for c in cities):
         return [], ["The scenario has no positions."]
+    if resolved.get("nodes"):
+        raise HelperError("resource nodes on the overworld need coordinates; remove them first")
     sim = Simulation(copy.deepcopy(resolved), npcs=False)
 
     def explicit(r: dict) -> None:

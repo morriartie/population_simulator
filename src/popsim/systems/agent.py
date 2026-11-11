@@ -6,10 +6,10 @@ from __future__ import annotations
 import math
 
 from popsim.components import (
-    Health, Needs, Orders, PriceMemory, Skills, Stamina, Traits, Workplace, Yield,
+    Branch, Health, Needs, Orders, PriceMemory, Skills, Stamina, Traits, Workplace, Yield,
 )
 from popsim.systems.fiscal import net_wage_per_hour, slots_of, workers_at
-from popsim.systems.movement import walk_distance, walk_stamina
+from popsim.systems.movement import node_access, walk_distance, walk_stamina
 from popsim.world.rand import clamp
 
 # Which need each good refills, and back.
@@ -146,13 +146,17 @@ def job_options(sim, eid: int, city: int) -> list[tuple[float, int, str]]:
     hl = sim.world.get(eid, Health)
     eff = sim.cfg["physiology"]["health"]["sick_work_efficiency"] if hl and hl.sick else 1.0
     raw = []
-    for nid in sim.nodes_by_city.get(city, []):
+    for nid in sim.nodes_for(city):
         y = sim.world.get(nid, Yield)
         amount = sim.ledger.balance(nid, y.good)
         avail = min(1.0, amount / 10.0)
         s = skills.get(y.good, 1.0)
         work = work_stamina_per_tick(sim, eid, y)
-        walk = walk_stamina(sim, walk_distance(sim, eid, nid))  # stamina to walk there (REQ-3A.6)
+        access = node_access(sim, city, nid) if sim.world.get(nid, Branch) is not None else None
+        if access is not None:
+            walk = access[1]  # an overworld node: the main road plus its branch, one way (REQ-3A.11)
+        else:
+            walk = walk_stamina(sim, walk_distance(sim, eid, nid))  # stamina to walk there (REQ-3A.6)
         if avail <= 0 or st.current < work + walk:
             continue
         price = price_ref(sim, eid, city, y.good)

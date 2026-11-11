@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from popsim.components import Action, Home, Position
+from popsim.components import Action, Branch, Home, Position, Trip
 
 DEFAULTS = {
     "walk": {"speed": 5.0, "stamina_per_unit": 0.8},
@@ -76,3 +76,56 @@ def at_home(sim, eid: int) -> bool:
     if home is None or home.house is None:
         return False
     return walk_distance(sim, eid, home.house) == 0.0 and sim.world.alive(home.house)
+
+
+# -- overworld nodes (REQ-3A.11) ---------------------------------------------------------------------
+
+
+def node_access(sim, city: int, nid: int) -> tuple[float, float] | None:
+    """(hours, stamina) one way from ``city`` to the overworld node ``nid`` along the main road to the
+    junction and then the branch, or None when the node cannot be reached from ``city``: it hangs off a road
+    that does not touch the city or that does not exist now."""
+    br = sim.world.get(nid, Branch)
+    if br is None or city not in (br.a, br.b):
+        return None
+    found = sim.find_road(br.a, br.b)
+    if found is None:
+        return None
+    road = found[1]
+    frac = br.t if city == br.a else 1.0 - br.t
+    return road.hours * frac + br.hours, road.stamina_cost * frac + br.stamina_cost
+
+
+def start_trip(sim, eid: int, act: Action, city: int, nid: int, ticks: int) -> None:
+    """Leave ``city`` for the overworld node ``nid``: the out leg is a committed walk at the trip's own
+    hours and stamina, then the shift starts (REQ-3A.11). The citizen is on the roads, in no city, and
+    cannot trade until it is back."""
+    from popsim.components import Location
+
+    hours, stamina = node_access(sim, city, nid)
+    sim.cancel_all_orders(eid)
+    here, there = pos(sim, eid), pos(sim, nid)
+    n = sim.hours_to_ticks(hours)
+    act.kind, act.target, act.ticks_left, act.carry = "walk", nid, n, 0.0
+    act.walk_from, act.walk_to, act.walk_total = here, there, n
+    act.walk_stamina = stamina / n
+    act.then = ("gather", nid, ticks)
+    sim.world.add(eid, Trip(origin=city, node=nid))
+    sim.world.get(eid, Location).city = None
+
+
+def return_from_trip(sim, eid: int) -> None:
+    """The way back from an overworld node: a Travel leg to the city the trip started from. It costs the same
+    as the out leg but can never strand a tired citizen, because stamina is only floored at zero."""
+    from popsim.components import Action as A, Location, Travel
+
+    trip = sim.world.get(eid, Trip)
+    sim.world.remove(eid, Trip)
+    hours, stamina = node_access(sim, trip.origin, trip.node) or (0.0, 0.0)
+    ticks = sim.hours_to_ticks(hours) if hours > 0 else 1
+    here = pos(sim, eid)
+    sim.world.add(eid, Travel(origin=trip.origin, dest=trip.origin, ticks_left=ticks,
+                              stamina_per_tick=stamina / ticks, total_ticks=ticks, from_pos=here))
+    act = sim.world.get(eid, A)
+    act.kind, act.target, act.ticks_left, act.carry = "travel", trip.origin, ticks, 0.0
+    clear_walk(act)

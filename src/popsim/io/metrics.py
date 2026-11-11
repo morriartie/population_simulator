@@ -121,7 +121,7 @@ class Metrics:
                 "support_paid": self._treasury.get(name, {}).get("support", 0) / unit,
                 "deaths_today": sum(1 for d in self.deaths if d["day"] == day and d["city"] == name),
                 **{f"stock_{g}": sum(sim.inv(e, g) for e in residents) for g in sim.goods},
-                **{f"node_{g}": sum(sim.ledger.balance(n, g) for n in sim.nodes_by_city.get(cid, []))
+                **{f"node_{g}": sum(sim.ledger.balance(n, g) for n in sim.nodes_of(cid))
                    for g in sim.goods},
             })
         self._walk = {}

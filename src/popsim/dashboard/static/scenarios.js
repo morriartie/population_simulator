@@ -247,11 +247,14 @@ export async function mount(main, name) {
       // houses (REQ-3A.8) and workplaces (REQ-3A.4)
       const houseCount = Array.isArray(c.houses) ? c.houses.length : (c.houses && c.houses.count) || 0;
       card.append(h("div", { class: "row", style: "margin-top:10px" },
-        h("label", { class: "field" }, "Houses", h("input", { type: "number", min: 0, step: 1, value: houseCount || "", placeholder: "none",
+        h("label", { class: "field" }, "Houses (% of population)", h("input", { type: "number", min: 0, max: 1000, step: "any", value: c.housing_pct ?? "",
+          placeholder: `${eff(["housing_pct"]) ?? 0} (scenario)`,
+          oninput: (e) => { ownList("cities")[ci].housing_pct = toNum(e.target.value); changed(); } })),
+        h("label", { class: "field" }, "Extra houses", h("input", { type: "number", min: 0, step: 1, value: houseCount || "", placeholder: "none",
           disabled: Array.isArray(c.houses),
           oninput: (e) => { const n = toNum(e.target.value, true); ownList("cities")[ci].houses = n ? { count: n } : undefined; changed(); } })),
-        h("span", { class: "hint" }, Array.isArray(c.houses) ? "Houses are listed with positions in the YAML tab."
-          : "Each house shelters one person and gives better rest. Fewer houses than people leaves some sleeping outdoors.")));
+        h("span", { class: "hint" }, `${Math.max(0, Math.floor((c.population || 0) * (c.housing_pct ?? eff(["housing_pct"]) ?? 0) / 100 + 0.5))} houses are generated from the percentage `
+          + "(120 gives more houses than people, 80 fewer); extra houses are added on top. Each house shelters one person and gives better rest.")));
       const wps = c.workplaces || [];
       card.append(h("h4", { style: "margin:10px 0 4px" }, "Workplaces (public jobs paid by this city's treasury)"));
       if (wps.length) card.append(h("table", { class: "mini" },
@@ -282,6 +285,45 @@ export async function mount(main, name) {
       list.push({ name: nm, population: 40, nodes: [{ good: goods[0], initial: 250, max_amount: 350, regen_per_hour: 4, base_rate: 0.7, stamina_cost: 5 }] });
       changed(true);
     } }, "Add city"));
+    return fs;
+  }
+
+  // Resource points outside the cities (REQ-3A.11): each hangs off a road through a junction.
+  function renderWorldNodes() {
+    const nodes = eff(["nodes"]) || [];
+    const goods = eff(["goods"]) || ["food", "wood"];
+    const cities = eff(["cities"]) || [];
+    const inh = inherited(["nodes"]);
+    const names = cities.map((c) => c.name);
+    const fs = h("fieldset", { class: inh ? "inherited" : "" }, h("legend", {}, "Resource points (outside the cities)"),
+      h("p", { class: "hint" }, "Each one lies on the overworld and branches off a road at a junction, t from 0 (first city) to 1 (second city). Needs cities with coordinates."),
+      h("div", { class: "row" }, h("label", { class: "field" }, "Houses (% of population), all cities",
+        h("input", { type: "number", min: 0, max: 1000, step: "any", value: eff(["housing_pct"]) ?? "", placeholder: "0",
+          oninput: (e) => { const v = toNum(e.target.value); if (v === undefined) delete st.own.housing_pct; else st.own.housing_pct = v; changed(); } }))));
+    if (nodes.length) fs.append(h("table", { class: "mini" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Resource"), ...NODE_FIELDS.map(([, t]) => h("th", {}, t)), h("th", {}, "x"), h("th", {}, "y"),
+        h("th", {}, "Road from"), h("th", {}, "to"), h("th", {}, "t"), h("th", {}, ""))),
+      h("tbody", {}, nodes.map((nd, ni) => {
+        const set = (fn) => { fn(ownList("nodes")[ni]); changed(); };
+        const road = (nd.branch && nd.branch.road) || ["", ""];
+        const citySel = (idx) => h("select", { onchange: (e) => set((n) => { n.branch = n.branch || { road: ["", ""], t: 0.5 }; n.branch.road = [...(n.branch.road || ["", ""])]; n.branch.road[idx] = e.target.value; if (!n.branch.road[0] && !n.branch.road[1]) delete n.branch; }) },
+          h("option", { value: "" }, "auto"), names.map((n) => h("option", { value: n, selected: n === road[idx] }, n)));
+        return h("tr", {},
+          h("td", {}, h("select", { onchange: (e) => set((n) => { n.good = e.target.value; }) }, goods.map((g) => h("option", { value: g, selected: g === nd.good }, g)))),
+          ...NODE_FIELDS.map(([k]) => h("td", {}, h("input", { type: "number", step: "any", min: 0, value: nd[k] ?? "", "aria-label": `Resource point ${ni + 1} ${k}`,
+            oninput: (e) => set((n) => { n[k] = toNum(e.target.value); }) }))),
+          ...[0, 1].map((axis) => h("td", {}, h("input", { type: "number", step: "any", placeholder: "auto", value: (nd.at || [])[axis] ?? "", "aria-label": `Resource point ${ni + 1} ${axis ? "y" : "x"}`,
+            oninput: (e) => set((n) => setAt(n, axis, e.target.value)) }))),
+          h("td", {}, citySel(0)), h("td", {}, citySel(1)),
+          h("td", {}, h("input", { type: "number", step: "any", min: 0, max: 1, value: nd.branch && nd.branch.t != null ? nd.branch.t : "", placeholder: "auto",
+            oninput: (e) => set((n) => { const v = toNum(e.target.value); if (n.branch) { if (v === undefined) delete n.branch.t; else n.branch.t = v; } }) })),
+          h("td", {}, h("button", { type: "button", class: "danger", "aria-label": `Remove resource point ${ni + 1}`,
+            onclick: () => { ownList("nodes").splice(ni, 1); changed(true); } }, "Remove")));
+      }))));
+    fs.append(h("button", { type: "button", style: "margin-top:6px", onclick: () => {
+      ownList("nodes").push({ good: goods[0], initial: 200, max_amount: 300, regen_per_hour: 3, base_rate: 0.7, stamina_cost: 5 });
+      changed(true);
+    } }, "Add resource point"));
     return fs;
   }
 
@@ -415,7 +457,7 @@ export async function mount(main, name) {
           scalar("Merchant share", ["npc", "merchant_share"], { min: 0, max: 1, step: 0.05,
             hint: inherited(["npc", "merchant_share"]) ? "Inherited. Fraction of each city's people who trade" : "Fraction of each city's people who trade" }),
         )),
-      renderFiscal(), renderCities(), renderRoads(), renderEvents(),
+      renderFiscal(), renderCities(), renderWorldNodes(), renderRoads(), renderEvents(),
       h("p", { class: "hint" }, "Needs, pricing, traits and other fine-grained settings are edited in the YAML tab; see the built-in defaults for every key."));
   }
 

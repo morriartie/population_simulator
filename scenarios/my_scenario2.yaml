@@ -1,0 +1,63 @@
+extends: baseline.yaml
+world_name: my_scenario
+cities:
+- {name: City A, population: 50, x: 15, y: 5, radius: 3, housing_pct: 100}
+- {name: City B, population: 20, x: -5, y: 0, housing_pct: 100}
+- {name: City C, x: 10, y: -10, population: 20, housing_pct: 100}
+- {name: City D, x: -20, y: 0, population: 10, housing_pct: 100}
+roads:
+- {a: City B, b: City A}
+- {a: City C, b: City B}
+- {a: City A, b: City C}
+- {a: City B, b: City D}
+nodes:
+- good: food
+  initial: 250
+  max_amount: 350
+  regen_per_hour: 4
+  base_rate: 0.7
+  stamina_cost: 5
+  at: [-15, 5]
+  branch:
+    road: [City B, City D]
+    t: 0.63
+- good: food
+  initial: 250
+  max_amount: 350
+  regen_per_hour: 4
+  base_rate: 0.7
+  stamina_cost: 5
+  at: [-15, -5]
+  branch:
+    road: [City B, City D]
+    t: 0.72
+- good: food
+  initial: 250
+  max_amount: 350
+  regen_per_hour: 4
+  base_rate: 0.7
+  stamina_cost: 5
+  at: [-10, -5]
+  branch:
+    road: [City B, City D]
+    t: 0.39
+- good: wood
+  initial: 250
+  max_amount: 350
+  regen_per_hour: 4
+  base_rate: 0.7
+  stamina_cost: 5
+  at: [5, -5]
+  branch:
+    road: [City C, City B]
+    t: 0.37
+- good: wood
+  initial: 250
+  max_amount: 350
+  regen_per_hour: 4
+  base_rate: 0.7
+  stamina_cost: 5
+  at: [0, -5]
+  branch:
+    road: [City C, City B]
+    t: 0.57

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from popsim.components import Action, Health, Location, Position, Skills, Stamina, Travel, Workplace, Yield
+from popsim.components import Action, Health, Location, Position, Skills, Stamina, Travel, Trip, Workplace, Yield
 from popsim.records import on_gather, on_walk, on_work
 from popsim.systems.fiscal import pay_wage
 from popsim.systems.agent import stamina_per_unit
 from popsim.systems.merchant import on_arrival
-from popsim.systems.movement import clear_walk
+from popsim.systems.movement import clear_walk, return_from_trip
 
 
 def gather_tick(sim, eid: int, act: Action, st: Stamina) -> int:
@@ -112,7 +112,8 @@ class ActionSystem:
         for eid in gatherers:
             units = gather_tick(sim, eid, sim.world.get(eid, Action), sim.world.get(eid, Stamina))
             if units:
-                on_gather(sim, eid, units, sim.world.get(eid, Location).city)
+                trip = sim.world.get(eid, Trip)
+                on_gather(sim, eid, units, trip.origin if trip is not None else sim.world.get(eid, Location).city)
 
         if workers:  # fair order when the treasury cannot pay everyone; same seeded stream
             sim.rng.shuffle(workers)
@@ -131,7 +132,8 @@ class ActionSystem:
                 p, a, b = sim.world.get(eid, Position), sim.world.get(tr.origin, Position), sim.world.get(tr.dest, Position)
                 if p is not None and a is not None and b is not None:
                     f = 1.0 - tr.ticks_left / tr.total_ticks
-                    p.x, p.y = a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f
+                    ax, ay = tr.from_pos if tr.from_pos is not None else (a.x, a.y)
+                    p.x, p.y = ax + (b.x - ax) * f, ay + (b.y - ay) * f
             if tr.ticks_left <= 0:
                 arrived.append((eid, tr.dest))
         for eid, dest in arrived:
@@ -143,3 +145,8 @@ class ActionSystem:
             act = sim.world.get(eid, Action)
             act.kind, act.target, act.ticks_left, act.carry = "idle", None, 0, 0.0
             on_arrival(sim, eid, dest)
+
+        # A citizen out at an overworld node whose shift or walk is over heads back (REQ-3A.11).
+        for eid, (trip, act, loc) in list(sim.world.query(Trip, Action, Location)):
+            if loc.city is None and act.kind == "idle" and sim.world.get(eid, Travel) is None:
+                return_from_trip(sim, eid)
