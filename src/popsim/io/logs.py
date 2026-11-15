@@ -127,6 +127,7 @@ def write_outputs(sim, out_dir: str | Path, ledger_log: bool = False, scenario: 
     write_csv(m.checks, out / "conservation_daily.csv")
     write_csv(sim.event_log, out / "events.csv")
     write_csv(m.transit, out / "transit.csv")
+    write_csv(m.jobs_daily, out / "jobs_daily.csv")
     (out / "config.json").write_text(json.dumps(sim.cfg, indent=1, default=str))
     (out / "world.json").write_text(json.dumps(world_layout(sim), indent=1))
     write_csv([{"a": r["a"], "b": r["b"], "length": r["length"], "hours": r["hours"],
@@ -135,6 +136,11 @@ def write_outputs(sim, out_dir: str | Path, ledger_log: bool = False, scenario: 
         rows = [{"tick": t, "src": s, "dst": d, "asset": a, "amount": n, "reason": r}
                 for t, s, d, a, n, r in sim.ledger.log]
         write_csv(rows, out / "ledger_log.csv")
+    from popsim.policies import snapshot as policy_snapshot
+
+    pol = policy_snapshot(sim)
+    if pol["daily"] or pol["events"] or pol["sites"] or any(p["enabled"] for p in pol["policies"]):
+        (out / "policies.json").write_text(json.dumps(pol, indent=1, default=str))
     if getattr(sim, "player", None) is not None:
         from popsim.player import write_outputs as write_player
 

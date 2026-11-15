@@ -9,12 +9,16 @@ from popsim.systems.basic import (
 from popsim.systems.decision import DecisionSystem
 from popsim.systems.fiscal import FiscalSystem
 from popsim.systems.market import MarketSystem
+from popsim.generators import GeneratorSystem
+from popsim.process import TagSystem
+from popsim.signals import SignalSystem
 
 
 class MetricsSystem:
     name = "metrics"
 
     def run(self, sim) -> None:
+        sim.metrics.sample_jobs(sim)
         if (sim.tick + 1) % sim.ticks_per_day == 0:
             sim.metrics.end_of_day(sim)
 
@@ -22,7 +26,7 @@ class MetricsSystem:
 REGISTRY = {
     cls.name: cls
     for cls in (EventSystem, RegenerationSystem, PhysiologySystem, NeedsSystem, ConsumptionSystem,
-                DecisionSystem, ActionSystem, MarketSystem, AgingSystem, FiscalSystem, MetricsSystem)
+                DecisionSystem, ActionSystem, MarketSystem, AgingSystem, FiscalSystem, SignalSystem, GeneratorSystem, TagSystem, MetricsSystem)
 }
 
 

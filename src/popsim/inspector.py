@@ -12,10 +12,11 @@ from popsim.components import (
     NPC, Action, Area, City, Demographics, Health, Home, House, Location, MerchantState, Metabolism,
     Needs, Orders, Position, PriceMemory, Record, Role, Skills, Stamina, Traits, Travel, Trip, Workplace, Yield,
 )
+from popsim import resources
 from popsim.systems.fiscal import net_wage_per_hour, policy
 from popsim.systems.movement import at_home, distance_to, walk_distance, walk_stamina
 from popsim.systems.agent import (
-    GOOD_NEED, ask_price, bid_price, expected_daily_spend, job_options, price_ref,
+    ask_price, bid_price, expected_daily_spend, job_options, price_ref,
     reservation_wage, stock_target, wealth_target,
 )
 
@@ -62,6 +63,14 @@ def city_overview(sim) -> list[dict]:
     return out
 
 
+def _eid_of(sim, act: Action) -> int | None:
+    """The citizen an action belongs to (actions are stored one per citizen)."""
+    for eid, (a,) in sim.world.query(Action):
+        if a is act:
+            return eid
+    return None
+
+
 def _action_label(sim, act: Action) -> str:
     if act.kind == "gather" and act.target is not None:
         y = sim.world.get(act.target, Yield)
@@ -69,6 +78,11 @@ def _action_label(sim, act: Action) -> str:
     if act.kind == "work" and act.target is not None:
         wp = sim.world.get(act.target, Workplace)
         return f"work: {wp.task}" if wp else "work"
+    if act.kind == "task":
+        from popsim.components import TaskPlan
+
+        plan = sim.world.get(_eid_of(sim, act), TaskPlan)
+        return f"{plan.step} {plan.tag.replace('_', ' ')} at site {plan.site}" if plan is not None else "task"
     if act.kind == "travel" and act.target is not None:
         return f"travel to {sim.city_name(act.target)}"
     if act.kind == "walk" and act.target is not None:
@@ -218,7 +232,7 @@ def _plan(sim, eid: int, city: int) -> dict:
     gold = sim.gold(eid)
     goods = []
     for good in sim.goods:
-        target = stock_target(sim, eid, good) if good in GOOD_NEED else 0
+        target = stock_target(sim, eid, good) if good in resources.of(sim).good_need else 0
         inv = sim.inv(eid, good)
         bid = bid_price(sim, eid, city, good, noise=0.0)
         ask = ask_price(sim, eid, city, good, noise=0.0)
@@ -285,6 +299,17 @@ def _jobs(sim, eid: int, loc: Location, act: Action, rec: Record | None) -> dict
                        "wage_per_hour": _g(sim, wp.wage), "net_wage_per_hour": _g(sim, net_wage_per_hour(sim, wp)),
                        "expected_income_per_stamina": _g(sim, net_wage_per_hour(sim, wp) / max(wp.stamina_per_hour, 1e-9)),
                        "node_stock": None}
+    if act.kind == "task":
+        from popsim.components import TaskPlan, Tags
+        from popsim.process import task_wage
+
+        plan = sim.world.get(eid, TaskPlan)
+        tg = sim.world.get(plan.site, Tags) if plan is not None else None
+        if tg is not None:
+            current = {"node": plan.site, "good": f"task:{plan.tag}", "city": sim.city_name(tg.city), "public": True,
+                       "task": True, "step": plan.step, "items": plan.items, "ticks_left": act.ticks_left,
+                       "position": _pos(sim, plan.site), "distance": _r(distance_to(sim, eid, plan.site), 3),
+                       "wage_per_hour": _g(sim, task_wage(sim, tg, plan.tag)), "node_stock": None}
     options = []
     if loc.city is not None:
         for score, nid, good, per_hour in job_options(sim, eid, loc.city):
@@ -421,4 +446,7 @@ def city_map(sim, city: str) -> dict:
                        {"x": round(act.walk_to[0], 3), "y": round(act.walk_to[1], 3)}})
     return {"city": city, "spatial": bool(getattr(sim, "spatial", False)), "center": {"x": pos.x, "y": pos.y},
             "radius": area.radius if area else 0.0, "nodes": nodes, "houses": houses, "workplaces": works,
-            "citizens": people, "tick": sim.tick, "day": sim.day()}
+            "citizens": people, "tick": sim.tick, "day": sim.day(),
+            "signals": [{"kind": kind, "x": round(pt[0], 3), "y": round(pt[1], 3)}
+                        for kind, g in sorted(sim.__dict__.get("demand", {}).get(cid, {}).items())
+                        for pt in g["points"]]}

@@ -18,7 +18,7 @@ Requirements derived from [INSTRUCTIONS.md](INSTRUCTIONS.md) for a society simul
 ## 1A. Software Architecture
 
 - **REQ-1A.1 ECS core:** custom minimal ECS. Component stores are dicts keyed by entity ID.
-- **REQ-1A.2 System pipeline:** a fixed, ordered pipeline per tick, configured in one place.
+- **REQ-1A.2 System pipeline:** a fixed, ordered pipeline per tick, configured in one place. The demand and job-generation systems of REQ-5A (`signals`, `generators`, `tags`) are entries of the same pipeline.
   - Example order: physiology, needs, decision, jobs, market clearing, tax, aging.
 - **REQ-1A.3 Concurrency and determinism:** systems may run in parallel where it is safe to do so.
   - Results must stay deterministic and reproducible (REQ-1.8) regardless of parallelism.
@@ -290,7 +290,7 @@ Cities, resources, jobs and houses have positions. Moving between positions take
   - Defaults are chosen so a walk across a typical city takes under an hour and a road between cities keeps today's scenario values (about 8 hours and 20 stamina for the arbitrage road).
 - **REQ-3A.4 Workplaces and jobs:** a job is performed at a position.
   - A gathering job is performed at its resource node's position (REQ-3.1), out on the overworld, reached by the trip of REQ-3A.11.
-  - Other jobs (public jobs such as road building and guard duty, REQ-5.5, and job contracts, REQ-1A.8) are workplace entities with a `Position`, a city, a task type and a wage. Workplaces are created by the scenario (`workplaces:` per city) or by events.
+  - Other jobs (public jobs such as road building and guard duty, REQ-5.5, and job contracts, REQ-1A.8) are workplace entities with a `Position`, a city, a task type and a wage. Workplaces are created by the scenario (`workplaces:` per city), by events, or, during a run, by a generator rule when demand for them persists (REQ-5A.6).
   - The job board of a city (REQ-3.2) lists the workplaces of that city with their positions.
 - **REQ-3A.5 Walking:** `walk` is a committed action (REQ-4.1.2) with a destination position.
   - It takes `ceil(distance / walk.speed / hours_per_tick)` ticks (at least one) and costs `distance * walk.stamina_per_unit` stamina, spread over the ticks. The NPC's position moves in a straight line to the destination.
@@ -401,6 +401,190 @@ Cities, resources, jobs and houses have positions. Moving between positions take
   - Prices should converge toward equilibrium.
 - **REQ-5.4** Price, inflation, and trade-flow phenomena must emerge from agent behavior, not be hard-coded.
 
+## 5A. Demand, Jobs and Policies
+
+All of this section is implemented. A policy is a named switch for generator rules in config; the demand layer, tagged sites, task jobs, offices and seeds below are what the rules create and run on. The order it was built in is REQ-5A.14.
+
+### Overview
+
+Needs and blocked tasks put **signals** ("points") on a city's demand board. **Generators** are config rules that watch the board and create **jobs** when a signal is strong enough: a field to plant, an office to staff. Citizens choose jobs themselves, as they do today (REQ-4.1.7). A **policy** is a named switch for a group of generators.
+
+```
+emitters --> signals --> generators --> jobs --> citizens choose --> effects
+ needs,       per city,   when/create/   gather,   job_options        tags change,
+ blocked      decaying    limits         office,                      nodes appear
+ tasks                                   task site
+```
+
+### Policies
+
+- **REQ-5A.1 Policies (implemented):** a policy is a named switch for a group of generator rules (REQ-5A.6). It is an entry of the `policies:` block (`enabled`, off by default, a title and a description); the rules that name it in their `policy` key run only while it is on, and a rule with no `policy` is always on. The scenario sets the switch; the Play view can flip it during a live run (`POST /api/session/control` with `{action: policy, value: {name, enabled}}`), and the flip is logged as an event. With every policy off, a run is exactly the run it was before policies existed (the golden hashes of REQ-5A.4 hold it to that). Nothing here draws random numbers and gold moves only through the ledger, so determinism and conservation (REQ-5.1) hold with policies on or off. Scenario validation (REQ-1C.3) rejects unknown policy names and a non-boolean `enabled`.
+- **REQ-5A.2 Farming and forestry (implemented):** the `farming` policy has one rule, `plant_food`: when more than 10% of a city's residents have food at or below the urgent level (the `need:food` signal) for a day, and fewer than `max_active` sites of the rule are in progress, the cooldown has passed and the treasury holds the `reserve`, the city commissions a `field` site outside the city (REQ-5A.7). Planting needs seeds from an estate office, travel and work by citizens (REQ-5A.8, REQ-5A.9); after the growth time (3 days at fertility 1.0, longer on poorer land) the field becomes a food spot (REQ-3A.11) that also yields seeds (REQ-5A.10). The `forestry` policy has the rule `plant_trees` for the shelter need and a `grove` process that needs labor only and becomes a wood spot. Where: the fertility field `f(x, y)` in [0, 1] (`world/fertility.py`: smooth seeded noise plus optional `blobs`, config `fertility:`) must be at least `min_fertility`, the spot outside every city and `min_spacing` from other nodes and sites; the best spot has the highest fertility less a penalty per hour of walking from the city, and its branch road joins a road that touches the city. A grown site's size and regeneration scale with its land (`0.5 + f`), and its starting stock is counted as injected in the daily conservation check.
+- **REQ-5A.3 Policies in the dashboard (implemented):** a run's Charts view has a Policies section, one card per policy with its state (On/Off), description and settings, a switch in a live run, and recent actions. The farming card shows each city's share at the urgent level against the threshold, the fields growing, today's decision per city, and a map of the fertility field with cities, roads, food spots, grown fields and growing fields (with a progress ring), which follows the day scrubber. A run saves `policies.json` when a policy was on or acted. See REQ-5A.12 for the rules, sites and demand it also shows.
+
+### Job kinds (refactor)
+
+- **REQ-5A.4 Job kinds (implemented):** a job kind is one object (`popsim.jobs`) implementing `raw_options` (the jobs it offers a citizen in a city, scored together with the other kinds' as in REQ-4.1.7), `start`, `interrupt_walk` and `interrupt_act` (whether an urgent need breaks off the walk to the job or the job itself) and `run_tick`, listed in a `JobKind` registry; the golden hashes are in `tests/golden/hashes.json`. `job_options`, the decision system, the interruption check and the action system dispatch by kind instead of branching on component types. The kinds are `gather` (resource nodes, REQ-3A.4), `workplace` (public jobs, REQ-5.5) and `task` (REQ-5A.8). `gather` and `workplace` are adapters over the existing behavior.
+  - **No behavior change:** the refactor comes first. Before it, the outputs of every shipped scenario (all CSV files) are recorded as golden hashes in the test suite, and the refactored code must reproduce them exactly. That includes the order of the seeded shuffles of gatherers and workers in the action system. A scenario that does not use the new features gives the same results as before (REQ-3A.9).
+  - New kinds are added by writing the class and listing it. The estate finance office (REQ-5A.9) and any future job reuse the same walk, trip, stamina, wage and interruption rules.
+
+### Signals
+
+- **REQ-5A.5 Demand signals (implemented):** each city has a demand board holding one **gauge** per signal kind. The kinds are an open registry: `need:food`, `need:shelter` (the need wood satisfies), `need:rest`, `service:<task>` (REQ-5A.9), and later `market:shortage:<good>`.
+  - **Emitters** run once a day at a configured hour (the `signals` system, after `needs`). The needs emitter posts a point of weight 1 for each resident of the city whose need is at or below its urgent level (the same test as support payments, REQ-5.5); residents out on a gathering trip count for the city they left (REQ-3A.11). The requirements emitter posts a `service:<task>` point for each open site task that needs that office to hand out its items (REQ-5A.7), whether or not the office exists or is staffed; the point is the demand for the service.
+  - **Gauges, not objects:** the gauge is the sum of the live points, recomputed at each sampling, so thousands of hungry citizens cost one number. The board also stores, per gauge, `since` (the day it first rose above each rule's threshold, reset when it falls below) and a capped list of point positions used only for drawing. Points are not entities and do not affect the simulation except through the gauge.
+  - **Share:** `share = gauge / residents` for need signals; rules can test a share (`share_gt`) or a count (`count_gte`).
+  - Emitters visit entities in ascending id order and draw no random numbers, so results are reproducible (REQ-1.8). The board and its history are part of the snapshot (REQ-1A.6).
+
+### Generators
+
+- **REQ-5A.6 Generators (implemented):** a generator is a rule in the `generators:` config block. It has `when` (a signal and a threshold, held for `for_days`; optionally `min_population`), `create` (what to make), `limits` (`max_active`, `cooldown_days`, `max_per_city`), who pays (the city treasury) and optionally `close_when` (`idle_days`) and `policy` (the policy whose switch enables it). Example:
+  ```yaml
+  generators:
+    plant_food:     {policy: farming, when: {signal: need:food, share_gt: 0.10, for_days: 1},
+                     create: {process: field, at: fertile_site}, limits: {max_active: 2, cooldown_days: 2}}
+    finance_office: {when: {signal: "service:estate_finance", count_gte: 1, for_days: 1, min_population: 20},
+                     create: {workplace: estate_finance}, close_when: {idle_days: 5}, limits: {max_per_city: 1}}
+    plant_trees:    {policy: forestry, when: {signal: need:shelter, share_gt: 0.10},
+                     create: {process: grove, at: fertile_site}}
+  ```
+  - The `generators` system runs once a day. A rule fires when its threshold has held for `for_days`, the limits allow it and the treasury can afford it; the cost is wages and fees paid by ledger transfers, never a gold sink (REQ-5.1). A rule of a disabled policy does nothing.
+  - **Creators** (`process`, `workplace`) and **placements** (`fertile_site`: the fertility rule of REQ-5A.2; `in_city`: a deterministic position inside the city, derived from the seed, the city and a serial number, with no random draws) are registries. Everything else is config, so a new job is a new rule and, where it needs a new kind of site, a new process definition (REQ-5A.7).
+  - **Offices:** a workplace made by a rule is an ordinary workplace (REQ-3A.4). It closes after `idle_days` with no demand, which also ends the shift of anyone working there (an existing interruption). A workplace listed in the scenario counts as existing, so none is created beside it. An office that nobody staffs while tasks wait for it gets a better wage each day (`raise_wage: {step, max}`: the wage is multiplied by `1 + step` each day, up to `max` times the base), paid by the treasury, because a public job at the base wage does not compete with gathering for hungry citizens.
+  - Every firing, refusal (with its reason: below threshold, limit, treasury short, no site) and closing is logged with its day and city, for the dashboard (REQ-5A.12).
+  - The farming policy of REQ-5A.2 becomes the `plant_food` rule, with the same defaults. The forestry policy and its `plant_trees` rule are a second example that needs only config (REQ-5A.13).
+
+### Sites, tags and requirements
+
+- **REQ-5A.7 Tagged sites (implemented):** a site is an entity with a `Position`, usually a `Branch` (REQ-3A.11) and a `Tags` component, a mapping of tag name to data. Tags are the flags of the site: `planting_spot`, `waiting_seeds`, `growing`, `food_spot`. Tags and their rules are defined in config (`processes:`), not in code:
+  ```yaml
+  processes:
+    field:
+      tags: [planting_spot, waiting_seeds]
+      waiting_seeds: {requires: {items: {seed: 5}, labor_hours: 2}, on_done: {remove: waiting_seeds, add: growing}}
+      growing:       {timer_days: 3, scaled_by: fertility, on_done: {add: food_spot}}
+  ```
+  - **Requirements** (a registry of small classes): `items` (units delivered to the site), `labor_hours`, `timer_days` (optionally scaled, as the growth time is by fertility in REQ-5A.2) and a `service` (an office that must be staffed to hand out the items, REQ-5A.9), which is a precondition for offering the task and the source of the service signal, not something that blocks a stage once its items and labor are there. A tag with an unmet requirement shows what is missing (`seed 3/5`, `labor 1/2 h`).
+  - **Effects** (a registry): add or remove a tag, spawn a resource node (the node of REQ-3A.11, made by the same function the builder uses), and others later. The `food_spot` tag turns the site into a resource node whose size and regeneration scale with fertility; its starting stock is counted as injected in the daily conservation check (REQ-5.1).
+  - **Items:** items delivered to a site are ledger transfers from the citizen to the site's own account; when the tag's requirements are met they go to `nature`, so every asset still sums to zero.
+  - The `tags` system, after `action` in the pipeline, checks requirements each tick and applies effects in entity id order. It replaces the `Plot` component. A site with only a timer behaves as the plot does now.
+
+### Tasks and travel
+
+- **REQ-5A.8 Task jobs (implemented):** a tag whose requirement citizens can satisfy (items, labor) is an open **task**. The task board is derived from the sites each tick, not stored; only claims are stored (on the tag data).
+  - **Choosing:** tasks are offered by the `task` job kind (REQ-5A.4) to residents of the commissioning city who can reach the site by the roads (REQ-3A.11). They are scored by wage per stamina with the walk counted both ways, like any other job (REQ-3A.7), and chosen by the citizen itself; nobody is assigned. Survival needs keep their priority (REQ-4.1.10): hunger or rest breaks off a task as it breaks off gathering.
+  - **Plans:** a claimed task is a plan of steps on the citizen, such as `go_office, withdraw, trip_out, deliver, work, trip_back`. Walk and trip steps reuse REQ-3A.5 and REQ-3A.11 (the citizen leaves the city, cannot trade while away, and returns by the same roads at the same cost). Only tasks use plans; gathering and public work do not change. The plan is an `Action` of kind `task` plus a `TaskPlan` component; the walk to the office is a walk whose follow-up is the task, and the way out is the trip of REQ-3A.11 with the task as its follow-up.
+  - **Claims:** each task has `slots`; a slot, and the units of any item it needs from the city, are reserved from the moment a citizen sets out, so two citizens never count on the same seeds. Labor adds up across citizens up to the slots.
+  - **Wages:** the work step pays an hourly wage from the commissioning city's treasury, taxed as other wages (REQ-5.5). When the treasury cannot pay, the task closes for now, as a public job does.
+  - **Wage raise:** while a tag has no claim, its wage is raised each day (`raise_wage`, as for offices in REQ-5A.6), so that a task nobody wants becomes worth taking.
+  - **Timeouts:** a task with no progress for its `timeout_days` is cancelled and its site removed: reservations are released, carried items stay with the citizen (their own goods, REQ-5.1) and the event is logged. A citizen who dies carries its goods to the city by the estate rule (REQ-5.1).
+  - **Determinism:** the board is scanned in entity id order and uses no random numbers.
+
+### Offices and services
+
+- **REQ-5A.9 Estate finance office (implemented):** a workplace with the task `estate_finance` (REQ-3A.4) inside a city, with one slot by default and a wage from the treasury. It is created by a generator when a `service:estate_finance` signal persists (REQ-5A.6), or by the scenario.
+  - **Staffed:** the office is staffed while a citizen has a `work` action there. The `staffed(estate_finance)` requirement is met only then.
+  - **Issuing items:** a planter's `withdraw` step (REQ-5A.8) succeeds only while the office is staffed and the city's inventory holds the units not already reserved. The items move from the city's account to the citizen's by ledger transfer. A task whose items are not in the city inventory is not offered.
+  - **Procurement:** while on shift, the finance worker places buy orders for the city for the units the open tasks need beyond the stock and the reservations, paid from the treasury and escrowed as any order (REQ-1A.7). The city is an order owner through the path the player account already uses (REQ-1C.9), and its fills are settled as other fills, with taxes (REQ-5.5).
+  - **Services module:** a small `offices` module exposes `staffed(city, task)` and services such as `issue_items`; a future job that needs an office calls the same functions and posts its own `service:<task>` signal. If nobody takes the finance job, no planting happens: the blocker is shown (REQ-5A.12) and a rule may raise the wage while a task is blocked (decided when built).
+
+### Seeds
+
+- **REQ-5A.10 Seeds (implemented):** `seed` is an ordinary marketable good (REQ-3.2): a scenario adds it to `goods` and `pricing.initial_prices`; scenarios that do not are unchanged, and a policy that needs a good checks that it is listed when the scenario is validated.
+  - **Production:** a resource node may have a `byproduct` (for example 0.1 seed per unit of food gathered). Farm spots, including grown fields, therefore produce seeds. Citizens keep no stock target for goods that are not needs (REQ-4.1.9), so they offer seeds for sale.
+  - **Buyer:** the city, through the finance office's procurement (REQ-5A.9). A scenario may give a city a starting stock (`depot: {seed: 30}` on the city), minted from `nature` at genesis.
+  - Seeds follow every ledger rule: they are conserved, appear in the daily goods check as production or consumption (planting consumes them) and are inherited with the rest of an estate.
+
+### Dashboard
+
+- **REQ-5A.12 Dashboard (implemented):**
+  - **Demand:** a chart of each signal gauge per city and day, with each rule's threshold; and, on the city map (REQ-1C.2), the signal points as dots at the positions of the citizens behind them.
+  - **Generators:** each policy card lists its rules with signal against threshold, the last firing, and the reason for the last refusal.
+  - **Sites:** the policy map colors sites by tag (planting, waiting for seeds, growing with a progress ring, food spot). Each open task shows what it waits for (`seeds 3/5`, `labor 1/2 h`) and its blockers (`no finance office staffed`, `no seeds in the depot`, `no planter`, `treasury short`).
+  - **Offices:** opened and closed offices are drawn on the city map and listed as events.
+  - **Citizens:** the inspector (REQ-1C.5) shows the current plan step of a task (`going to the office`, `walking to field 12`, `planting`) and the site's position.
+  - A run saves the board history, the generator log and the sites in `policies.json`, and live runs stream them like the other series (REQ-1C.4).
+
+### Generality, acceptance and order of work
+
+- **REQ-5A.13 Generality (implemented):** nothing in REQ-5A.4 to REQ-5A.9 is specific to farming. Two examples must run on the same code with config alone: the `plant_food` rule with the `field` process (food) and the `plant_trees` rule with a `grove` process (wood, for the shelter need); and a test-only process, "repair road" (wood and labor, then a timer), proves a process with different items and no node.
+- **REQ-5A.14 Order of work (done), each step tested before the next and the existing tests staying green:**
+  0. Golden hashes of all shipped scenarios; a spike that adds the `seed` good to a test scenario and checks a city can own market orders.
+  1. The `JobKind` refactor (REQ-5A.4), hashes unchanged.
+  2. Signals: board, emitters, history, and the Demand chart, with no change in behavior (REQ-5A.5).
+  3. Tags, requirements and effects, replacing `Plot` (REQ-5A.7).
+  4. Generators, and farming and forestry migrated to rules; office creation and closing (REQ-5A.6).
+  5. Task jobs: plans, trips, claims, timeouts, and the estate finance office with `issue_items` (REQ-5A.8, REQ-5A.9).
+  6. Seeds: the good, the byproduct and procurement (REQ-5A.10).
+  7. Dashboard additions (REQ-5A.12).
+  8. Spec update, demo scenarios, and the generality proofs (REQ-5A.13).
+- **Acceptance checks (covered by `tests/test_policies.py`, `tests/test_golden.py` and `tests/js/policies.test.mjs`):** signals sum to the number of residents at their urgent level; a rule fires only after its threshold has held for `for_days` and never beyond its limits; an office is created once, staffed by a citizen, closes after `idle_days` and is not created beside an authored one; a planter walks to the office, gets seeds only while it is staffed and the units are in stock, travels out, delivers, works, and returns, with the stamina and hours of REQ-3A.11; hunger interrupts a task; a task that stalls is cancelled and its reservations released; the field becomes a food spot only after the seeds and the labor and then the timer; every asset still sums to zero and the daily goods check passes; a run, and a run resumed from a snapshot, are identical for the same seed; scenarios without the new blocks give their old results.
+
+## 5B. Resource Contract
+
+**Status: implemented** (`popsim/resources.py`, `tests/test_resources.py`). Before it, the links between a need, the good that satisfies it, the job that supplies it and the rule that reacts to a shortage are spread over code and several config blocks. This section puts them in one place in config: a `resources:` block. It changes no behavior; it says where the facts live and checks them when a scenario is loaded.
+
+### What is hardcoded now
+
+| Link | Where it lives today |
+|---|---|
+| good → need it satisfies | `GOOD_NEED = {"food": "food", "wood": "shelter"}` in `systems/agent.py` (and `NEED_GOOD`, derived), the tuple in `ConsumptionSystem` (`systems/basic.py`) |
+| need restored per unit | `physiology.metabolism.satiety_per_food` (0.5) and `shelter.per_wood` (0.5) |
+| expected units per day | `needs.daily_units` (budgets and stock targets) |
+| need → signal | `signals.needs` |
+| signal → what to create | each rule in `generators:` |
+| process → good it yields | the `spawn_node` effect inside the process |
+| seed: produced by, consumed by | the `byproduct` of a node and the `waiting_seeds` requirement of `field`, unrelated in config |
+
+A new need or good therefore needs a code change. Nothing checks that a rule reacting to `need:food` creates something that produces food.
+
+### Contract
+
+- **REQ-5B.1 The `resources:` block:** one entry per good, in `default.yaml` and overridable by a scenario. A scenario overrides an entry key by key, and `null` drops an entry inherited from the default. The lookups do not depend on the world's `goods` list, so a world without wood behaves as before. Example:
+  ```yaml
+  resources:
+    food:
+      satisfies: {need: food, per_unit: 0.5}       # restores this much of the need per unit consumed
+      daily_units: 1.4                             # expected use per citizen per day (budgets, stock targets)
+      supply: {process: field, policy: farming, at: fertile_site, reserve: 40,
+               limits: {max_active: 2, cooldown_days: 2}}
+      trigger: {signal: "need:food", share_gt: 0.10, for_days: 1}
+    wood:
+      satisfies: {need: shelter, per_unit: 0.5}
+      daily_units: 0.6
+      supply: {process: grove, policy: forestry, at: fertile_site, reserve: 20,
+               limits: {max_active: 2, cooldown_days: 2}}
+      trigger: {signal: "need:shelter", share_gt: 0.10, for_days: 1}
+    seed:
+      input: true                                  # not consumed by a need; used up by processes
+      byproduct_of: food                           # which nodes yield it as a byproduct
+      consumed_by: [field]                         # processes whose requirements take it
+  ```
+  A good with no entry is an ordinary tradeable good with no need, supply rule or process behind it.
+- **REQ-5B.2 One source of truth:** the consumption system, the decision system (self-supply scoring), the market (stock targets) and the merchant read the good-to-need link, `per_unit` and `daily_units` from the contract instead of `GOOD_NEED` and the scattered keys. `GOOD_NEED` and `NEED_GOOD` are gone; `resources.of(sim)` gives the lookups (built once per run, and built from the old keys for a snapshot written before the contract). The old keys (`physiology.metabolism.satiety_per_food`, `shelter.per_wood`, `needs.daily_units`) move into the contract; no shipped scenario overrides them, and a scenario that still sets one is rejected with a message naming the new place. One good per need, as now (a second good for the same need is an error).
+- **REQ-5B.3 Generator defaults from the contract:** a rule may be written `{from_resource: food}`. The loader fills its `policy`, `when` (from `trigger`) and `create` and `limits` (from `supply`) from the resource, and any key written in the rule wins, nested mappings merging key by key (so a scenario can change one limit of a shipped rule). The shipped `plant_food` and `plant_trees` become `from_resource` rules, and the resolved rule is identical to today's, so the run is identical. `finance_office` is not a resource rule and stays as it is. Rules written in full, as now, keep working.
+- **REQ-5B.4 Validation at load:** scenario validation (REQ-1C.3) and `load_config` check the contract. Errors stop the load; warnings are listed and do not.
+  - **Errors:** `satisfies.need` is not a need in `needs.defaults`; two goods satisfy the same need; `supply.process` is not in `processes:`; `trigger.signal` is not a registered signal (for `need:<n>`, `n` must be in `signals.needs`); `byproduct_of` or `consumed_by` names a good or process that does not exist; `per_unit` or `daily_units` not a positive number.
+  - **Loop closes (error):** for a resource with `trigger` and `supply`, the process must yield the same good (a `spawn_node` for it) and the good must satisfy the need named in the signal. A `need:food` rule that builds a grove is rejected.
+  - **Warnings:** an input good that nothing produces (no `byproduct_of`, no process or market source) or that no process consumes; a rule that reacts to `need:<n>` when no resource satisfies `n` (needs that only an action satisfies, such as rest by sleeping, are not checked because no rule serves them); a process that requires a good that is not in `goods` while an enabled rule can create it (the case of `field` and `seed` in a world without seeds), or whose required input good lists other processes in `consumed_by`; a `supply.policy` that is not in `policies:`.
+- **REQ-5B.5 No behavior change:** with the default contract, every shipped scenario gives the same results as before. The golden hashes (REQ-5A.4) must not change, and `farming` is added to them now that its policies are implemented (it was left out while they were being built). The contract adds no random draws and moves no gold.
+- **REQ-5B.6 Dashboard:** a read-only Resources table in the run view (good, need, per unit, supply process and policy, trigger and its current value, with the policy state) and the contract's warnings in the scenario editor next to its errors. Both come from the same description function as the policies card, so a new resource appears without dashboard code.
+- **REQ-5B.7 Extending it:** a new good for an existing need, or a new supply chain for one, is config only: a resource entry, a process and a `from_resource` rule (the test swaps wood for timber this way). A new **need** is not config only: the builder creates the four needs (food, rest, shelter, wealth) and the decay of food and shelter and the death clock are in code. Making the needs table fully data driven is left open (section 7). Code is also needed for a new kind of requirement, effect or placement (REQ-5A.6, REQ-5A.7).
+
+### Order of work
+
+Each step is tested before the next and the existing tests stay green.
+
+0. Add `farming` to the golden hashes and record them. Write down the current `GOOD_NEED` and constants as the default contract in a test, so step 1 can be checked against them.
+1. The `popsim.resources` module: parse and validate the block (errors only), expose `need_of`, `good_of`, `per_unit`, `daily_units`. No system reads it yet.
+2. Switch the readers (consumption, decision, market, merchant, inspector) to the contract and remove the old keys and the constants. Hashes unchanged.
+3. `from_resource` rules: the loader fills them, the shipped rules use it. Resolved config and hashes unchanged.
+4. Warnings and the loop-closes check; a test scenario for each error and each warning.
+5. Dashboard: the Resources table and the warnings in the editor.
+6. Spec and README update; a test that replaces the shelter good (wood by timber) with config alone and runs. (Done: steps 0 to 6.)
+
+**Acceptance checks:** the default contract reproduces today's constants exactly; golden hashes hold after steps 2 and 3; a scenario with a good satisfying a second good's need, a missing process, an unknown signal, or a rule whose process yields the wrong good is rejected with a message that names the entry; an unproduced or unused input gives a warning; a scenario that swaps the good behind a need, with its process and rule, in config alone runs and the citizens consume the new good; a scenario that sets a removed old key is rejected with the new location in the message.
+
 ## 6. Suggested Acceptance Checks
 
 - Total currency and total resources stay constant, apart from explicit central-authority injections and from regeneration or consumption.
@@ -408,9 +592,11 @@ Cities, resources, jobs and houses have positions. Moving between positions take
 - Connecting isolated cities narrows the price gap between them.
 - Sleep deprivation lowers `daily_max_stamina`, which raises sickness probability.
 - Higher skill lowers stamina cost per unit gathered.
+- When more than the set share of a city is in urgent need, jobs to meet the need are created and taken by citizens, and the need eases (REQ-5A).
 
 ## 7. Open Questions
 
+- Resource contract (REQ-5B): whether more than one good may satisfy a need (the code allows one now), and how a good would then be chosen (cheapest, or by preference); whether the needs table should become data driven (the list of needs, their initial levels, decay and death clock are in code now), and whether a need satisfied by an action, such as rest by sleeping, should be declared in it (`satisfied_by`); whether a good can be consumed by a job other than a process requirement (wood for building, for example), which would need a `consumed_by` richer than a list of processes.
 - Numeric defaults: decay rates, threshold values, trait spreads, EMA smoothing factor, and N ticks to death.
 - Housing details: house price and decay, rent versus ownership, interest on debt, default and foreclosure rules, and inheritance rules.
 - Recipes and labor: which goods need which inputs and how much work.

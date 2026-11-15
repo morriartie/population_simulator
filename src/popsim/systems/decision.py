@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from popsim.components import Action, Location, MerchantState, Needs, Orders, Role, Skills, Stamina, Traits, Yield
 from popsim.components import Branch, Home, Workplace
+from popsim.jobs import by_action, kind_of
 from popsim.records import set_reason
-from popsim.systems.agent import GOOD_NEED, job_options, reservation_wage, stock_target, work_stamina_per_tick
+from popsim import resources
+from popsim.systems.agent import job_options, reservation_wage, stock_target, work_stamina_per_tick
 from popsim.systems.fiscal import workers_at
 from popsim.systems.merchant import merchant_decide
 from popsim.systems.movement import cfg as movement_cfg, start_trip, start_walk, walk_distance, walk_stamina
@@ -47,27 +49,13 @@ class DecisionSystem:
             # An urgent need breaks off a walk (REQ-3A.5); it stays where it is.
             if st.current < act.walk_stamina:
                 return True
-            if act.then is not None and act.then[0] == "work":
-                return sim.world.get(act.then[1], Workplace) is None or u["rest"] >= 1.0 \
-                    or (u["food"] >= 1.0 and no_food)
-            if act.then is not None and act.then[0] == "gather":
-                y = sim.world.get(act.then[1], Yield)
-                if y is None or (u["rest"] >= 1.0):
-                    return True
-                return u["food"] >= 1.0 and no_food and y.good != "food"
+            kind = by_action(act.then[0]) if act.then is not None else None
+            if kind is not None:
+                return kind.interrupt_walk(sim, eid, act, needs, st)
             return u["food"] >= 1.0 and no_food
-        if act.kind == "work":
-            wp = sim.world.get(act.target, Workplace)
-            return wp is None or st.current < wp.stamina_per_hour * sim.h or u["rest"] >= 1.0 \
-                or (u["food"] >= 1.0 and no_food)
-        if act.kind == "gather":
-            y = sim.world.get(act.target, Yield)
-            if y is None:
-                return True
-            if st.current < work_stamina_per_tick(sim, eid, y) or u["rest"] >= 1.0:
-                return True
-            if u["food"] >= 1.0 and no_food and y.good != "food":
-                return True
+        kind = by_action(act.kind)
+        if kind is not None:
+            return kind.interrupt_act(sim, eid, act, needs, st)
         return False
 
     @staticmethod
@@ -132,7 +120,7 @@ class DecisionSystem:
             # (bid premium grows on unfilled bids) -> go gather it yourself.
             orders = sim.world.get(eid, Orders)
             best_self = (0.0, None)
-            for good, need in GOOD_NEED.items():
+            for good, need in resources.of(sim).good_need.items():
                 if sim.inv(eid, good) >= stock_target(sim, eid, good):
                     continue
                 sc = d["self_supply_weight"] * w[need] * u[need] * (1 + 2 * orders.bid_premium.get(good, 0.0))
@@ -168,24 +156,6 @@ class DecisionSystem:
         elif choice == "work":
             nid = opts[0][1]
             ticks = sim.hours_to_ticks(d["shift_hours"])
-            public = sim.world.get(nid, Workplace) is not None
-            kind = "work" if public else "gather"
-            if public and sim._wc is not None:
-                sim._wc[nid] = sim._wc.get(nid, 0) + 1  # the slot is taken from now on
-            if sim.world.get(nid, Branch) is not None:  # an overworld node: out along the roads (REQ-3A.11)
-                if act.target != nid:
-                    act.carry = 0.0
-                start_trip(sim, eid, act, city, nid, ticks)
-                return
-            if walk_distance(sim, eid, nid) > 0:  # the plan is two steps: walk there, then work (REQ-3A.6)
-                start_walk(sim, eid, act, nid, (kind, nid, ticks))
-                return
-            if public:
-                act.kind, act.target, act.ticks_left, act.carry = "work", nid, ticks, 0.0
-                return
-            if act.target != nid:  # resume partial progress only at the same node
-                act.carry = 0.0
-            act.kind, act.target = "gather", nid
-            act.ticks_left = ticks
+            kind_of(sim, nid).start(sim, eid, act, city, nid, ticks)
         else:
             act.kind, act.ticks_left = "idle", 0

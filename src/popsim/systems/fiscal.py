@@ -140,3 +140,7 @@ class FiscalSystem:
                         rec.support_today += each
             if each > 0:
                 _note(sim, cid, "support", each * len(needy))
+
+
+def income_tax_rate(sim, city: int) -> float:
+    return policy(sim, city)["income_tax"]

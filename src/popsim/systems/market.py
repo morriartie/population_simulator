@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from popsim.components import Action, Location, MerchantState, Orders, OpenOrder
 from popsim.ledger import GOLD, escrow_account
+from popsim import resources
 from popsim import player as pl
 from popsim.records import on_fill
 from popsim.systems.fiscal import pay_income_tax, pay_sales_tax
 from popsim.systems.agent import (
-    GOOD_NEED, ask_price, bid_price, observe_price, price_ref, stock_target,
+    ask_price, bid_price, observe_price, price_ref, stock_target,
 )
 from popsim.world.rand import clamp
 
@@ -74,7 +75,7 @@ def settle_fill(sim, city: int, f: dict) -> None:
     # Taxes (REQ-5.5): the seller pays income tax on the proceeds, the buyer the sales tax on the
     # transaction, both to the treasury of the city where the trade happened.
     tax_seller = pay_income_tax(sim, seller, city, qty * price, "income_tax")
-    tax_buyer = pay_sales_tax(sim, buyer, city, qty * price)
+    tax_buyer = pay_sales_tax(sim, buyer, city, qty * price) if buyer != city else 0
     if sim.player is not None and (buyer == sim.player or seller == sim.player):
         pl.on_fill(sim, city, f, tax_buyer, tax_seller)
 
@@ -90,7 +91,7 @@ def desired_orders(sim, eid: int, city: int) -> list[tuple[str, str, int, int]]:
         if ("buy", good) in has or ("sell", good) in has:
             continue
         inv = sim.inv(eid, good)
-        target = stock_target(sim, eid, good) if good in GOOD_NEED else 0
+        target = stock_target(sim, eid, good) if good in resources.of(sim).good_need else 0
         trade_buy = ms is not None and ms.mode == "buying" and ms.good == good
         trade_sell = ms is not None and ms.mode == "selling" and ms.good == good
         if trade_buy:
@@ -165,6 +166,13 @@ class MarketSystem:
                     places.setdefault(loc.city, []).append(
                         {"op": "place", "owner": eid, "side": side, "good": good,
                          "qty": qty, "price": price, "ref": eid})
+
+        from popsim import offices
+
+        for cid, good, qty, price in offices.procurement_orders(sim):  # the estate finance worker buys for the city
+            if sim.ledger.try_transfer(cid, escrow_account(cid), GOLD, qty * price, reason="escrow_lock"):
+                places.setdefault(cid, []).append({"op": "place", "owner": cid, "side": "buy", "good": good,
+                                                   "qty": qty, "price": price, "ref": cid})
 
         player_places = pl.place_ops(sim)
         for name, cid in cities:

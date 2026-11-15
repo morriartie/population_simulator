@@ -28,6 +28,8 @@ class Metrics:
         self.deaths: list[dict] = []
         self.checks: list[dict] = []
         self.transit: list[dict] = []  # daily NPCs on the road, per route
+        self.jobs_daily: list[dict] = []  # citizen-hours per city and job (REQ-5A.15)
+        self._jobs: dict[tuple[str, str], int] = {}  # (city, job) -> citizen-ticks today
         self.gather: dict[tuple[str, float], list[float]] = {}
         self.counters: dict[tuple[str, str], int] = defaultdict(int)
         self._day_trades: dict[tuple[int, str], list[int]] = {}
@@ -40,6 +42,8 @@ class Metrics:
     def __setstate__(self, state):  # snapshots written before newer fields existed
         self.__dict__.update(state)
         self.__dict__.setdefault("transit", [])
+        self.__dict__.setdefault("jobs_daily", [])
+        self.__dict__.setdefault("_jobs", {})
         self.__dict__.setdefault("_walk", {})
         self.__dict__.setdefault("_treasury", {})
 
@@ -87,8 +91,29 @@ class Metrics:
         acc[1] += stamina
 
     # -- daily aggregation --------------------------------------------------
+    def sample_jobs(self, sim) -> None:
+        """One tick of time use: what every citizen is doing, counted under its home city."""
+        from popsim.components import Home
+        from popsim.jobs import job_label
+
+        for eid, (_, loc) in sim.world.query(NPC, Location):
+            home = sim.world.get(eid, Home)
+            cid = home.city if home is not None else loc.city
+            if cid is None:
+                continue
+            k = (sim.city_name(cid), job_label(sim, eid))
+            self._jobs[k] = self._jobs.get(k, 0) + 1
+
     def end_of_day(self, sim) -> None:
         day = sim.day()
+        total: dict[str, int] = {}
+        for (city, _), n in self._jobs.items():
+            total[city] = total.get(city, 0) + n
+        for (city, job), n in sorted(self._jobs.items()):
+            self.jobs_daily.append({"day": day, "city": city, "job": job,
+                                    "hours": round(n * 24 / sim.ticks_per_day, 3),
+                                    "share": round(n / total[city], 4)})
+        self._jobs = {}
         unit = sim.unit
         for name, cid in sorted(sim.city_ids.items()):
             for good in sim.goods:

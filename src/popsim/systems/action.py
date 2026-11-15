@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from popsim.components import Action, Health, Location, Position, Skills, Stamina, Travel, Trip, Workplace, Yield
-from popsim.records import on_gather, on_walk, on_work
+from popsim.jobs import KINDS, actions
+from popsim.records import on_walk, on_work
 from popsim.systems.fiscal import pay_wage
 from popsim.systems.agent import stamina_per_unit
 from popsim.systems.merchant import on_arrival
@@ -31,6 +32,16 @@ def gather_tick(sim, eid: int, act: Action, st: Stamina) -> int:
         act.carry -= units
         if units:
             sim.ledger.transfer(act.target, eid, y.good, units, reason="gather")
+            if y.byproduct:  # a farm spot also gives seeds (REQ-5A.10)
+                carry = y.bp_carry if y.bp_carry is not None else {}
+                for g, ratio in sorted(y.byproduct.items()):
+                    carry[g] = carry.get(g, 0.0) + units * ratio
+                    n = int(carry[g])
+                    if n:
+                        carry[g] -= n
+                        sim.ledger.transfer("nature", eid, g, n, reason="byproduct")
+                        sim.metrics.count("regen", g, n)
+                y.bp_carry = carry
         sim.metrics.record_gather(y.good, progress, stamina, skill)
     else:
         act.ticks_left = 0
@@ -83,7 +94,7 @@ def walk_tick(sim, eid: int, act: Action, st: Stamina) -> None:
     clear_walk(act)
     if then is None:
         act.kind, act.target, act.ticks_left = "idle", None, 0
-    elif then[0] in ("gather", "work"):
+    elif then[0] in actions():
         act.kind, act.target, act.ticks_left, act.carry = then[0], then[1], then[2], 0.0
     else:
         act.kind, act.target, act.ticks_left = "sleep", None, then[2]
@@ -93,32 +104,19 @@ class ActionSystem:
     name = "action"
 
     def run(self, sim) -> None:
-        gatherers = []
+        buckets: dict[str, list[int]] = {k.action: [] for k in KINDS}
         walkers = []
-        workers = []
         for eid, (act, st) in sim.world.query(Action, Stamina):
             if act.kind == "sleep":
                 act.ticks_left -= 1
                 if act.ticks_left <= 0 or st.current >= st.daily_max:
                     act.kind, act.ticks_left = "idle", 0
-            elif act.kind == "gather":
-                gatherers.append(eid)
-            elif act.kind == "work":
-                workers.append(eid)
+            elif act.kind in buckets:
+                buckets[act.kind].append(eid)
             elif act.kind == "walk":
                 walkers.append(eid)
-        # Shuffle so low entity IDs don't always get first pick of a depleted node.
-        sim.rng.shuffle(gatherers)
-        for eid in gatherers:
-            units = gather_tick(sim, eid, sim.world.get(eid, Action), sim.world.get(eid, Stamina))
-            if units:
-                trip = sim.world.get(eid, Trip)
-                on_gather(sim, eid, units, trip.origin if trip is not None else sim.world.get(eid, Location).city)
-
-        if workers:  # fair order when the treasury cannot pay everyone; same seeded stream
-            sim.rng.shuffle(workers)
-            for eid in workers:
-                work_tick(sim, eid, sim.world.get(eid, Action), sim.world.get(eid, Stamina))
+        for kind in KINDS:  # each kind runs its own ticks, in registry order (REQ-5A.4)
+            kind.run_tick(sim, buckets[kind.action])
 
         for eid in walkers:  # a walker that arrives starts its task next tick
             walk_tick(sim, eid, sim.world.get(eid, Action), sim.world.get(eid, Stamina))

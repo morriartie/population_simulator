@@ -201,6 +201,65 @@ def generated_house_count(cfg: dict, c: dict) -> int:
     return max(0, int(math.floor(float(c["population"]) * float(pct) / 100.0 + 0.5)))
 
 
+def make_branch(sim, n: dict, label: str = "node"):
+    """Where a node ``n`` (a scenario ``nodes`` entry, or a site placed by a generator) is and the branch road
+    that joins it to a main road (REQ-3A.11): ``(x, y, Branch)``."""
+    cfg = sim.cfg
+    names = dict(sim.city_ids)
+    cxy, circles = {}, []
+    for name, cid in names.items():
+        p, area = sim.world.get(cid, Position), sim.world.get(cid, Area)
+        cxy[name] = (p.x, p.y)
+        circles.append((p.x, p.y, area.radius if area else 0.0))
+    road_cfg = (cfg.get("movement") or {}).get("road") or {"speed": 5.0, "stamina_per_unit": 0.5}
+    at = n.get("at")
+    br = n.get("branch") or {}
+    road = br.get("road")
+    t = br.get("t")
+    if road is None:
+        if at is None:
+            raise ValueError(f"{label}: give a position (at) or a branch")
+        found = nearest_junction(cfg, cxy, (float(at[0]), float(at[1])))
+        if found is None:
+            raise ValueError(f"{label}: there is no road to branch from")
+        road, t = [found[0], found[1]], found[2]
+    ra, rb = road
+    if ra not in cxy or rb not in cxy:
+        raise ValueError(f"{label}.branch.road: unknown city")
+    t = 0.5 if t is None else float(t)
+    if at is None:
+        at = beside_junction(cfg, circles, cxy[ra], cxy[rb], t)
+    nx, ny = float(at[0]), float(at[1])
+    jx, jy = junction_point(cxy[ra], cxy[rb], t)
+    straight = math.hypot(nx - jx, ny - jy)
+    length = float(n.get("branch_length", straight))
+    if length < straight - 1e-9:
+        raise ValueError(f"{label}.branch_length {length} is below the straight-line distance {straight:.3f}")
+    hours = float(n["branch_hours"]) if n.get("branch_hours") is not None else length / road_cfg["speed"]
+    stamina = (float(n["branch_stamina_cost"]) if n.get("branch_stamina_cost") is not None
+               else length * road_cfg["stamina_per_unit"])
+    return nx, ny, Branch(a=names[ra], b=names[rb], t=t, length=length, hours=hours, stamina_cost=stamina,
+                          jx=jx, jy=jy)
+
+
+def spawn_overworld_node(sim, n: dict, label: str = "node") -> int:
+    """Create one resource node outside every city on a branch of a main road (REQ-3A.11) and return its id.
+    ``n`` is a scenario ``nodes`` entry. The builder calls this for the scenario's nodes; sites that have grown
+    (REQ-5A.7) become nodes through ``node_components``, so both make identical nodes."""
+    nx, ny, branch = make_branch(sim, n, label)
+    nid = sim.world.create(*node_components(n), Position(nx, ny), branch)
+    sim.ledger.transfer("nature", nid, n["good"], int(n.get("initial", 0)), reason="genesis")
+    sim.overworld_nodes.append(nid)
+    return nid
+
+
+def node_components(n: dict) -> tuple:
+    """The components that make an entity a resource node outside every city."""
+    return (Yield(good=n["good"], max_amount=int(n["max_amount"]), base_rate=float(n["base_rate"]),
+                  stamina_cost=float(n["stamina_cost"]), byproduct=dict(n["byproduct"]) if n.get("byproduct") else None),
+            RegenerationRate(per_hour=float(n["regen_per_hour"])), Location(city=None), Account(kind="node"))
+
+
 def build_world(sim, npcs: bool = True) -> None:
     """Create the world in two steps (REQ-3.8): first the places (cities, resource nodes, roads, houses,
     workplaces), then, as a separate step on the finished world, its citizens (``populate_world``).
@@ -223,6 +282,8 @@ def build_world(sim, npcs: bool = True) -> None:
         cid = sim.world.create(City(name=c["name"]), Account(kind="city"), Position(cx, cy), Area(radius))
         sim.city_ids[c["name"]] = cid
         centres[cid] = (cx, cy, radius)
+        for good, qty in sorted((c.get("depot") or {}).items()):  # the city's own stock, for jobs that hand out items
+            sim.ledger.transfer("nature", cid, good, int(qty), reason="genesis")
         for n in c.get("nodes", []):
             off = _offset(n)
             if not sim.spatial:
@@ -247,49 +308,8 @@ def build_world(sim, npcs: bool = True) -> None:
     if cfg.get("nodes"):
         if not sim.spatial:
             raise ValueError("resource nodes outside cities need cities with coordinates")
-        names = {sim.world.get(cid, City).name: cid for cid in centres}
-        cxy = {n: (centres[cid][0], centres[cid][1]) for n, cid in names.items()}
-        circles = list(centres.values())
-        road_cfg = (cfg.get("movement") or {}).get("road") or {"speed": 5.0, "stamina_per_unit": 0.5}
         for k, n in enumerate(cfg["nodes"]):
-            at = n.get("at")
-            br = n.get("branch") or {}
-            road = br.get("road")
-            t = br.get("t")
-            if road is None:
-                if at is None:
-                    raise ValueError(f"nodes[{k}]: give a position (at) or a branch")
-                found = nearest_junction(cfg, cxy, (float(at[0]), float(at[1])))
-                if found is None:
-                    raise ValueError(f"nodes[{k}]: there is no road to branch from")
-                road, t = [found[0], found[1]], found[2]
-            ra, rb = road
-            if ra not in cxy or rb not in cxy:
-                raise ValueError(f"nodes[{k}].branch.road: unknown city")
-            t = 0.5 if t is None else float(t)
-            if at is None:
-                at = beside_junction(cfg, circles, cxy[ra], cxy[rb], t)
-            nx, ny = float(at[0]), float(at[1])
-            jx, jy = junction_point(cxy[ra], cxy[rb], t)
-            straight = math.hypot(nx - jx, ny - jy)
-            length = float(n.get("branch_length", straight))
-            if length < straight - 1e-9:
-                raise ValueError(f"nodes[{k}].branch_length {length} is below the straight-line distance {straight:.3f}")
-            hours = float(n["branch_hours"]) if n.get("branch_hours") is not None else length / road_cfg["speed"]
-            stamina = (float(n["branch_stamina_cost"]) if n.get("branch_stamina_cost") is not None
-                       else length * road_cfg["stamina_per_unit"])
-            nid = sim.world.create(
-                Yield(good=n["good"], max_amount=int(n["max_amount"]), base_rate=float(n["base_rate"]),
-                      stamina_cost=float(n["stamina_cost"])),
-                RegenerationRate(per_hour=float(n["regen_per_hour"])),
-                Location(city=None),
-                Position(nx, ny),
-                Account(kind="node"),
-                Branch(a=names[ra], b=names[rb], t=t, length=length, hours=hours, stamina_cost=stamina,
-                       jx=jx, jy=jy),
-            )
-            sim.ledger.transfer("nature", nid, n["good"], int(n.get("initial", 0)), reason="genesis")
-            sim.overworld_nodes.append(nid)
+            spawn_overworld_node(sim, n, f"nodes[{k}]")
 
     for r in cfg.get("roads", []):
         add_road(sim, sim.city_ids[r["a"]], sim.city_ids[r["b"]], r.get("hours"), r.get("stamina_cost"),

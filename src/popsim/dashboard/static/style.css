@@ -322,3 +322,19 @@ button.linklike { border: 0; background: none; padding: 0; color: inherit; text-
 .quote p { margin: 4px 0; font-size: 0.88rem; }
 .problems { margin: 6px 0; padding-left: 18px; color: var(--madder); font-size: 0.88rem; }
 .problems:empty { display: none; }
+
+/* Policies */
+.policies { display: grid; gap: 16px; margin-bottom: 20px; }
+.policy-card { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 14px 16px; }
+.policy-card header { display: flex; align-items: center; gap: 10px; }
+.policy-card header h3 { margin: 0; font-size: 1.1rem; }
+.policy-card header button { margin-left: auto; }
+.policy-card details { margin-top: 10px; }
+.policy-grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); margin-top: 12px; align-items: start; }
+.policy-grid canvas { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.policy-grid > div > .panel + .panel { margin-top: 14px; }
+.badge { font-size: 0.78rem; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); }
+.badge.on { background: var(--ok); border-color: var(--ok); color: var(--sheet); }
+@media (max-width: 900px) { .policy-grid { grid-template-columns: 1fr; } }
+.legend i.sq { width: 11px; height: 11px; border: 1px solid var(--line); border-radius: 2px; }
+.toolbar input[type="number"] { width: 4.5em; }

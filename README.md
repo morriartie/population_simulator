@@ -126,6 +126,7 @@ container, make it writable for the container user.
 
 | `taxes.yaml` | Income and sales tax, public jobs paid by the city treasury, a daily support payment; city B taxes at its own rate. |
 | `spatial.yaml` | Cities with coordinates, houses and nodes at positions. People walk to work and home; the road A–B is derived from the distance. |
+| `farming.yaml` | Demand-driven jobs: scarce food puts need points on each city's board, a rule commissions fields outside the city, an estate finance office opens to hand out seeds, citizens plant, and the fields grow into food spots. |
 | `overworld.yaml` | Resource points outside the cities on branch roads, and houses generated from a percentage of the population (120% in one city, 80% in the other). |
 
 Scenario files `extends:` another file (or `default`) and override any key. Events: `stimulus`,
@@ -215,6 +216,13 @@ tests/                   pytest: ECS/ledger, market, biology, simulation, API, d
   urgent and critical thresholds. Urgency is 0 above comfort, 1 at critical, and rises steeply below
   critical. At critical the order is strict (starving beats everything); below it, needs are weighed
   by per-NPC traits.
+- **Resource contract:** the `resources:` block of the config says, for each good, which need it
+  satisfies and by how much per unit, how much a citizen is expected to use per day, which process
+  supplies it and which signal should trigger new supply. Consumption, budgets and stock targets read
+  it, and a generator rule can be written `{from_resource: food}` to take its trigger and supply from
+  it. The loader rejects a contract that does not close (for example a `need:food` rule that builds
+  something that makes wood), and the scenario editor lists its warnings. The dashboard shows it in a
+  Resources table. Swapping the good behind a need is config only; adding a new need is not yet.
 - **Shelter:** an MVP stand-in for housing. It decays over time and is refilled by using wood, which
   gives every city a steady demand for wood. While shelter is critical, sleep restores less stamina
   and sickness is more likely.

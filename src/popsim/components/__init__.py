@@ -122,6 +122,8 @@ class Yield:
     max_amount: int
     base_rate: float  # units per hour at skill 1.0
     stamina_cost: float  # stamina per unit at skill 1.0
+    byproduct: dict | None = None  # good -> units per unit gathered (a farm spot also gives seeds, REQ-5A.10)
+    bp_carry: dict | None = None   # the fractions not yet handed out
 
 
 @dataclass
@@ -324,3 +326,29 @@ class Player:
     basis: dict = field(default_factory=dict)  # good -> [qty, cost] for the average cost
     realized: dict = field(default_factory=dict)  # good -> cents
     taxes: int = 0
+
+
+@dataclass
+class Tags:
+    """A site (REQ-5A.7): an entity with a position whose flags are ``tags`` (name -> data). The process in config
+    says what each tag waits for and what happens when it is met."""
+
+    process: str
+    city: int                 # the commissioning city: it pays the wages
+    tags: dict = field(default_factory=dict)
+    meta: dict = field(default_factory=dict)   # fertility and the like
+    rule: str | None = None   # the generator that made it
+    created_tick: int = 0
+    done: bool = False
+
+
+@dataclass
+class TaskPlan:
+    """A citizen's claim on a task (REQ-5A.8): the site, the tag, what step it is on, and the items it takes."""
+
+    site: int
+    tag: str
+    step: str                 # "withdraw" | "work"
+    ticks: int                # the shift
+    items: dict = field(default_factory=dict)   # good -> units reserved at the office, then carried
+    office: int | None = None

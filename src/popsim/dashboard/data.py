@@ -85,8 +85,11 @@ def load_run(runs_dir: Path, name: str) -> dict:
     if not (d / "summary.json").exists():
         raise NotFound(f"no run {name!r}")
     config = json.loads((d / "config.json").read_text()) if (d / "config.json").exists() else None
+    pol = json.loads((d / "policies.json").read_text()) if (d / "policies.json").exists() else {}
     return {
         "name": name,
+        "policies": pol.get("policies", []), "policy_daily": pol.get("daily", []),
+        "policy_events": pol.get("events", []), "signal_daily": pol.get("signals", []), "sites": pol.get("sites", []),
         "inspectable": find_snapshot(runs_dir, name) is not None,
         "summary": json.loads((d / "summary.json").read_text()),
         "config": config,
@@ -98,6 +101,7 @@ def load_run(runs_dir: Path, name: str) -> dict:
         "events": _read_csv(d / "events.csv"),
         "checks": _read_csv(d / "conservation_daily.csv"),
         "transit": _read_csv(d / "transit.csv"),
+        "jobs_daily": _read_csv(d / "jobs_daily.csv"),
     }
 
 
@@ -229,6 +233,31 @@ def validate(data: dict, scen_dir: Path, want_world: bool = False, full: bool = 
                     _num(errors, f"{path}.public_jobs.slots", pj["slots"], 1, integer=True)
 
     check_fiscal("fiscal", cfg.get("fiscal") or {})
+
+    def check_policies(pols):
+        """Policies (REQ-5A): known names (the defaults and any a generator rule names), a boolean ``enabled``."""
+        if not isinstance(pols, dict):
+            errors.append("policies: must be a mapping")
+            return
+        known = set(defaults().get("policies") or {}) | {
+            r.get("policy") for r in list((defaults().get("generators") or {}).values())
+            + list((cfg.get("generators") or {}).values()) if isinstance(r, dict) and r.get("policy")}
+        for name, body in pols.items():
+            if name not in known:
+                errors.append(f"policies.{name}: unknown policy (policies are {', '.join(sorted(known))})")
+                continue
+            if not isinstance(body, dict):
+                errors.append(f"policies.{name}: must be a mapping")
+                continue
+            if "enabled" in body and not isinstance(body["enabled"], bool):
+                errors.append(f"policies.{name}.enabled: must be true or false")
+
+    check_policies(cfg.get("policies") or {})
+    from popsim.resources import validate as check_resources
+
+    r_errors, r_warnings = check_resources(cfg)  # the resource contract (REQ-5B.4)
+    errors.extend(r_errors)
+    warnings.extend(r_warnings)
     pl = cfg.get("player") or {}
     if not isinstance(pl, dict):
         errors.append("player: must be a mapping")

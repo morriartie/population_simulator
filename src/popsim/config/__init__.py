@@ -52,7 +52,9 @@ def resolve(data: dict, base_dir: str | Path) -> dict:
         merged = deep_merge(_load_file(parent_path), data)
     if "pipeline" not in merged:
         merged = deep_merge(_load_file(DEFAULT_PATH), merged)
-    return merged
+    from popsim.resources import expand
+
+    return expand(merged)  # rules written ``{from_resource: good}`` (REQ-5B.3)
 
 
 def load_config(path: str | Path | None = None, overrides: dict[str, Any] | None = None) -> dict:
@@ -61,4 +63,10 @@ def load_config(path: str | Path | None = None, overrides: dict[str, Any] | None
         cfg = deep_merge(_load_file(DEFAULT_PATH), cfg)
     if overrides:
         cfg = deep_merge(cfg, overrides)
+    from popsim.resources import ConfigError, expand, validate
+
+    cfg = expand(cfg)
+    errors, _warnings = validate(cfg)  # the resource contract (REQ-5B.4); warnings are for the editor
+    if errors:
+        raise ConfigError("invalid resource contract:\n  " + "\n  ".join(errors))
     return cfg

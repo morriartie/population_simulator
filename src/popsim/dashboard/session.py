@@ -14,7 +14,8 @@ from pathlib import Path
 
 from popsim.components import NPC, Location, Travel
 
-SERIES = ("prices_daily", "cities_daily", "flows", "deaths", "events", "checks", "transit")
+SERIES = ("prices_daily", "cities_daily", "flows", "deaths", "events", "checks", "transit",
+          "policy_daily", "policy_events", "signal_daily", "jobs_daily")
 SLICE_SECONDS = 0.1
 
 
@@ -25,7 +26,11 @@ class Conflict(RuntimeError):
 def _series(sim) -> dict[str, list]:
     m = sim.metrics
     return {"prices_daily": m.daily_prices, "cities_daily": m.daily, "flows": m.flows,
-            "deaths": m.deaths, "events": sim.event_log, "checks": m.checks, "transit": m.transit}
+            "deaths": m.deaths, "events": sim.event_log, "checks": m.checks, "transit": m.transit,
+            "jobs_daily": m.jobs_daily,
+            "policy_daily": sim.__dict__.setdefault("policy_log", []),
+            "policy_events": sim.__dict__.setdefault("policy_events", []),
+            "signal_daily": sim.__dict__.setdefault("signal_log", [])}
 
 
 class Session:
@@ -65,7 +70,12 @@ class Session:
         for _, (tr,) in sim.world.query(Travel):
             k = (sim.city_name(tr.origin), sim.city_name(tr.dest))
             routes[k] = routes.get(k, 0) + 1
+        from popsim.policies import is_enabled, names
+        from popsim.process import site_view, sites
+
         return {"tick": sim.tick, "day": sim.day(), "hour": sim.hour(), "cities": cities,
+                "policies": {n: is_enabled(sim, n) for n in names(sim)},
+                "sites": [site_view(sim, e) for e, _ in sites(sim)],
                 "transit": [{"from": a, "to": b, "npcs": n} for (a, b), n in sorted(routes.items())]}
 
     def state(self) -> dict:
@@ -82,8 +92,12 @@ class Session:
         with self.lock:
             data = {k: list(v) for k, v in _series(self.sim).items()}
             from popsim.io.logs import world_layout
+            from popsim.policies import describe
+            from popsim.process import site_view, sites
 
             return {"name": self.name, "summary": None, "config": self.cfg, "world": world_layout(self.sim), **data,
+                    "policies": describe(self.sim),
+                    "sites": [site_view(self.sim, e) for e, _ in sites(self.sim)],
                     "state": self.state(), "now": self.now()}
 
     # -- feed -------------------------------------------------------------------
@@ -146,6 +160,12 @@ class Session:
                 if not 0.05 <= v <= 200:
                     raise ValueError("speed must be between 0.05 and 200 days per second")
                 self.speed = v
+            elif action == "policy":
+                from popsim.policies import set_enabled
+
+                if not isinstance(value, dict) or "name" not in value:
+                    raise ValueError("policy needs {name, enabled}")
+                set_enabled(self.sim, str(value["name"]), bool(value.get("enabled")))
             elif action == "extend":
                 days = float(value)
                 if days <= 0:

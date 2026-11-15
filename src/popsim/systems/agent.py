@@ -12,9 +12,7 @@ from popsim.systems.fiscal import net_wage_per_hour, slots_of, workers_at
 from popsim.systems.movement import node_access, walk_distance, walk_stamina
 from popsim.world.rand import clamp
 
-# Which need each good refills, and back.
-GOOD_NEED = {"food": "food", "wood": "shelter"}
-NEED_GOOD = {v: k for k, v in GOOD_NEED.items()}
+from popsim import resources  # which need each good refills, how much, how much is used per day (REQ-5B)
 
 
 def urgency(level: float, comfort: float, critical: float, k: float) -> float:
@@ -70,7 +68,7 @@ def observe_price(sim, eid: int, city: int, good: str, price: float) -> None:
 
 
 def expected_daily_spend(sim, eid: int, city: int) -> float:
-    units = sim.cfg["needs"]["daily_units"]
+    units = resources.of(sim).daily_units
     return sum(units[g] * price_ref(sim, eid, city, g) for g in sim.goods if g in units)
 
 
@@ -81,13 +79,13 @@ def wealth_target(sim, eid: int, city: int) -> float:
 
 def stock_target(sim, eid: int, good: str) -> int:
     tr = sim.world.get(eid, Traits)
-    per_day = sim.cfg["needs"]["daily_units"].get(good, 0.0)
+    per_day = resources.of(sim).daily_units.get(good, 0.0)
     return int(math.ceil(per_day * tr.stock_days))
 
 
 def need_urgency_for_good(sim, eid: int, good: str) -> float:
     needs = sim.world.get(eid, Needs)
-    need = GOOD_NEED.get(good)
+    need = resources.of(sim).good_need.get(good)
     return needs.urgency.get(need, 0.0) if need else 0.0
 
 
@@ -137,6 +135,8 @@ def ask_price(sim, eid: int, city: int, good: str, noise: float | None = None) -
 def job_options(sim, eid: int, city: int) -> list[tuple[float, int, str]]:
     """Score gathering jobs in ``city``: mostly expected income per stamina, plus
     smaller weights for preference and skill (REQ-4.1.7). Best first."""
+    from popsim.jobs import KINDS, JobCtx
+
     d = sim.cfg["decision"]
     w = d["job_weights"]
     skills = sim.world.get(eid, Skills).levels
@@ -145,53 +145,10 @@ def job_options(sim, eid: int, city: int) -> list[tuple[float, int, str]]:
     needs = sim.world.get(eid, Needs)
     hl = sim.world.get(eid, Health)
     eff = sim.cfg["physiology"]["health"]["sick_work_efficiency"] if hl and hl.sick else 1.0
+    ctx = JobCtx(d=d, skills=skills, tr=tr, st=st, needs=needs, eff=eff)
     raw = []
-    for nid in sim.nodes_for(city):
-        y = sim.world.get(nid, Yield)
-        amount = sim.ledger.balance(nid, y.good)
-        avail = min(1.0, amount / 10.0)
-        s = skills.get(y.good, 1.0)
-        work = work_stamina_per_tick(sim, eid, y)
-        access = node_access(sim, city, nid) if sim.world.get(nid, Branch) is not None else None
-        if access is not None:
-            walk = access[1]  # an overworld node: the main road plus its branch, one way (REQ-3A.11)
-        else:
-            walk = walk_stamina(sim, walk_distance(sim, eid, nid))  # stamina to walk there (REQ-3A.6)
-        if avail <= 0 or st.current < work + walk:
-            continue
-        price = price_ref(sim, eid, city, y.good)
-        income_per_stamina = price * s * eff / y.stamina_cost * avail
-        if walk > 0:
-            # Income per stamina over the whole task, the walk counted both ways (REQ-3A.7).
-            shift = work * sim.hours_to_ticks(d["shift_hours"])
-            income_per_stamina *= shift / (shift + 2 * walk)
-        # Income per hour counts only the hours at the job, never the commute (REQ-3A.7).
-        income_per_hour = price * y.base_rate * s * eff * avail
-        raw.append((income_per_stamina, nid, y.good, s, income_per_hour))
-    # Public jobs (REQ-5.5): a workplace pays a wage from the city's treasury, so it is offered only
-    # while a slot is free and the treasury can fund a shift. The wage is after income tax, the walk
-    # is counted both ways (REQ-3A.7) and, as for gathering, only hours at the job count as hours.
-    wc = None
-    for wid in sim.workplaces_by_city.get(city, []):
-        wp = sim.world.get(wid, Workplace)
-        if wp is None or wp.wage <= 0:
-            continue
-        if wc is None:
-            wc = getattr(sim, "_wc", None)
-            if wc is None:
-                wc = workers_at(sim)
-        if wc.get(wid, 0) >= slots_of(sim, wp) or sim.gold(city) < wp.wage * d["shift_hours"]:
-            continue
-        per_tick = wp.stamina_per_hour * sim.h
-        walk = walk_stamina(sim, walk_distance(sim, eid, wid))
-        if st.current < per_tick + walk:
-            continue
-        net = net_wage_per_hour(sim, wp)
-        ips = net / max(wp.stamina_per_hour, 1e-9)
-        if walk > 0:
-            shift = per_tick * sim.hours_to_ticks(d["shift_hours"])
-            ips *= shift / (shift + 2 * walk)
-        raw.append((ips, wid, wp.task, skills.get(wp.task, 1.0), net))
+    for kind in KINDS:  # every kind of job offers what it has (REQ-5A.4)
+        raw.extend(kind.raw_options(sim, eid, city, ctx))
     if not raw:
         return []
     max_inc = max(r[0] for r in raw) or 1.0

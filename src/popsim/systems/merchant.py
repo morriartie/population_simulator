@@ -8,11 +8,12 @@ it closes only because merchants move goods (REQ-5.4).
 from __future__ import annotations
 
 from popsim.components import Action, MerchantState, Orders, PriceMemory, Stamina
+from popsim import resources
 from popsim.systems.agent import known_price, price_ref, stock_target
 
 
 def reserve(sim, eid: int, good: str) -> int:
-    return stock_target(sim, eid, good) if good in sim.cfg["needs"]["daily_units"] else 0
+    return stock_target(sim, eid, good) if good in resources.of(sim).daily_units else 0
 
 
 def open_qty(sim, eid: int, side: str, good: str) -> int:

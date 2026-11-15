@@ -17,7 +17,7 @@ money:
 
 # Fixed system order per tick (REQ-1A.2). Systems that touch shared state
 # (ledger, market) always run in this order, so runs are deterministic.
-pipeline: [events, regeneration, physiology, needs, consumption, decision, action, market, aging, fiscal, metrics]
+pipeline: [events, regeneration, physiology, needs, consumption, decision, action, market, aging, fiscal, signals, generators, tags, metrics]
 
 npc:
   gold: {mean: 60.0, sd: 15.0, min: 5.0}
@@ -41,7 +41,6 @@ physiology:
     work_multiplier: 1.6
     travel_multiplier: 1.8
     sleep_multiplier: 0.6
-    satiety_per_food: 0.5
   health:
     base_sickness_per_hour: 0.0004
     fatigue_sickness_factor: 12.0     # extra risk as daily_max falls
@@ -58,7 +57,6 @@ physiology:
 # and is refilled by burning/using wood.
 shelter:
   decay_per_hour: 0.012
-  per_wood: 0.5
   sleep_penalty_when_critical: 0.7    # sleep restores less stamina
 
 needs:
@@ -71,7 +69,27 @@ needs:
   urgency_exponent: 2.0
   death_hours_at_zero: {food: 72}
   savings_days: 5                     # wealth target = days of expected spending * thrift
-  daily_units: {food: 1.4, wood: 0.6} # used for budgets and stock targets
+
+# The resource contract (REQ-5B): for each good, the need it satisfies, how much a unit restores, the expected
+# use per citizen per day, the process that supplies it and the signal that should trigger new supply.
+# A rule `{from_resource: food}` in `generators:` takes its policy, trigger and supply from here.
+resources:
+  food:
+    satisfies: {need: food, per_unit: 0.5}
+    daily_units: 1.4
+    supply: {process: field, policy: farming, at: fertile_site, reserve: 40,
+             limits: {max_active: 2, cooldown_days: 2}}
+    trigger: {signal: "need:food", share_gt: 0.10, for_days: 1}
+  wood:
+    satisfies: {need: shelter, per_unit: 0.5}
+    daily_units: 0.6
+    supply: {process: grove, policy: forestry, at: fertile_site, reserve: 20,
+             limits: {max_active: 2, cooldown_days: 2}}
+    trigger: {signal: "need:shelter", share_gt: 0.10, for_days: 1}
+  seed:
+    input: true                  # used up by processes, not by a need
+    byproduct_of: food           # food nodes yield it while they are gathered
+    consumed_by: [field]
 
 traits:
   risk:              {mean: 0.5, sd: 0.2, min: 0.0, max: 1.0}
@@ -149,6 +167,84 @@ fiscal:
   public_jobs:
     stamina_per_hour: 3.5 # default for workplaces: the effort of public work
     slots: 3              # default number of people a workplace employs at once
+
+# Demand, jobs and policies (REQ-5A). Needs and blocked tasks put signals on a city's demand board; generators
+# are rules that create jobs when a signal is strong enough; a policy is a named switch for a group of
+# generators. Every policy is off by default, so a scenario without `policies:` runs exactly as before.
+signals:
+  hour: 8                 # hour of the day the board is sampled and the generators run
+  needs: [food, shelter, rest]   # one `need:<name>` signal each: residents at or below the urgent level
+  max_points: 40          # positions kept per signal for drawing the points on the map
+
+policies:
+  farming:
+    enabled: false
+    title: Farming
+    description: When more than the set share of a city's people are in urgent need of food, its treasury commissions a new field outside the city. Citizens fetch seeds from the estate office, plant the field, and after a while it becomes a food spot.
+  forestry:
+    enabled: false
+    title: Forestry
+    description: When more than the set share of a city's people are in urgent need of shelter, its treasury commissions a grove outside the city. Citizens plant it, and after a while it becomes a wood spot.
+
+# The land (REQ-5A.2): fertility f(x, y) in [0, 1] and the rules for where a site may go.
+fertility:
+  seed: 7
+  scale: 14.0
+  octaves: 3
+  blobs: []               # [{at: [x, y], radius, strength}] spots of good land
+  min_fertility: 0.45     # land below this cannot be planted
+  min_spacing: 3.0        # distance to other nodes and sites
+  max_offset: 14.0        # how far off the road a site may be
+  distance_penalty: 0.02  # fertility given up per hour of walking from the city
+  city_margin: 0.5        # clearance outside a city's radius
+
+# Sites (REQ-5A.7): what a tag waits for (`requires`: items, labor_hours, timer_days) and what happens next.
+# `task` says how citizens do the work: the wage (gold per hour, paid by the commissioning city), the stamina,
+# the slots, a timeout, the `service` (an office that must be staffed to hand out the items) and `raise_wage`:
+# while nobody takes the task the treasury raises its wage each day by `step`, up to `max` times the base.
+processes:
+  field:
+    tags: [planting_spot, waiting_seeds]
+    waiting_seeds:
+      requires: {items: {seed: 5}, labor_hours: 2}
+      task: {label: plant, wage: 3.0, stamina_per_hour: 3.5, slots: 2, timeout_days: 8, service: estate_finance,
+              raise_wage: {step: 0.5, max: 5.0}}
+      on_done: {remove: [waiting_seeds], add: [growing]}
+    growing:
+      requires: {timer_days: 3.0, timer_scaled_by: fertility}
+      on_done: {remove: [growing, planting_spot], add: [food_spot]}
+    food_spot:
+      on_enter:
+        - spawn_node: {good: food, initial_frac: 0.15, max_amount: 300, regen_per_hour: 4.0, base_rate: 0.7,
+                       stamina_cost: 5.0, byproduct: {seed: 0.1}}
+  grove:
+    tags: [planting_spot, waiting_labor]
+    waiting_labor:
+      requires: {labor_hours: 3}
+      task: {label: plant trees, wage: 3.0, stamina_per_hour: 3.5, slots: 2, timeout_days: 8,
+              raise_wage: {step: 0.5, max: 5.0}}
+      on_done: {remove: [waiting_labor], add: [growing]}
+    growing:
+      requires: {timer_days: 4.0, timer_scaled_by: fertility}
+      on_done: {remove: [growing, planting_spot], add: [wood_spot]}
+    wood_spot:
+      on_enter:
+        - spawn_node: {good: wood, initial_frac: 0.15, max_amount: 300, regen_per_hour: 3.5, base_rate: 0.7,
+                       stamina_cost: 5.0}
+
+# Generators (REQ-5A.6). `when`: a signal and a threshold (`share_gt` of residents, or `count_gte`) held for
+# `for_days`. `create`: a `process` placed `at` a placement (fertile_site), or a `workplace` placed in_city;
+# `reserve` is the gold the treasury must hold. `limits`: max_active, cooldown_days, max_per_city.
+# `policy`: the policy whose switch enables the rule; a rule without one is always on.
+generators:
+  plant_food: {from_resource: food}     # policy, trigger and supply come from the resource contract
+  plant_trees: {from_resource: wood}
+  finance_office:
+    when: {signal: "service:estate_finance", count_gte: 1, for_days: 1, min_population: 20}
+    create: {workplace: {task: estate_finance, slots: 1, wage: 3.0, stamina_per_hour: 2.0,
+                         raise_wage: {step: 0.5, max: 5.0}}, at: in_city, treasury_days: 5}
+    close_when: {idle_days: 5}
+    limits: {max_per_city: 1}
 
 # Space and movement (REQ-3A). Distances are in abstract units (1 unit = 1 km). Speeds are
 # units per hour; stamina costs are per unit of distance.

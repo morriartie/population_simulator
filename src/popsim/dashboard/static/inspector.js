@@ -158,6 +158,8 @@ export class Inspector {
     const svg = svgEl("svg", { viewBox: `0 0 ${SIZE} ${SIZE}`, role: "img", "aria-label": `Map of ${m.city}`, class: "city-svg" });
     const ink3 = getComputedStyle(document.documentElement).getPropertyValue("--ink-3").trim();
     const ink = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
+    const madder = getComputedStyle(document.documentElement).getPropertyValue("--madder").trim();
+    const indigo = getComputedStyle(document.documentElement).getPropertyValue("--indigo").trim();
     svg.append(svgEl("circle", { cx: SIZE / 2, cy: SIZE / 2, r: R * k, fill: "none", stroke: ink3, "stroke-dasharray": "4 6" }));
     svg.append(svgEl("circle", { cx: SIZE / 2, cy: SIZE / 2, r: 3, fill: ink3 }));
     const goods = [...new Set(m.nodes.map((n) => n.good))];
@@ -177,6 +179,11 @@ export class Inspector {
       c.append(svgEl("title", {}, `${n.good} node, ${n.stock} in stock`));
       svg.append(c, svgEl("text", { x: px(n.x), y: py(n.y) - 15, "text-anchor": "middle", class: "map-note", style: "font-size:13px" }, n.good));
     }
+    for (const sg of m.signals || []) {  // demand points (REQ-5A.5): a ring where a citizen has an urgent need
+      const ring = svgEl("circle", { cx: px(sg.x), cy: py(sg.y), r: 9, fill: "none", stroke: sg.kind.startsWith("need:") ? madder : indigo, "stroke-width": 1.5, "stroke-dasharray": "3 2" });
+      ring.append(svgEl("title", {}, sg.kind));
+      svg.append(ring);
+    }
     for (const c of m.citizens) {
       if (c.walking && c.to) svg.append(svgEl("line", { x1: px(c.x), y1: py(c.y), x2: px(c.to.x), y2: py(c.to.y), stroke: ink3, "stroke-width": 1, "stroke-dasharray": "2 3" }));
     }
@@ -190,7 +197,7 @@ export class Inspector {
       svg.append(dot);
     }
     this.mapHost.replaceChildren(svg);
-    this.mapNote.textContent = `${m.citizens.length} people. Round markers are resource nodes, squares houses (filled when lived in), diamonds workplaces. Blue dots are walking, with a line to where they go. Click a dot to open that person.`;
+    this.mapNote.textContent = `${m.citizens.length} people. Round markers are resource nodes, squares houses (filled when lived in), diamonds workplaces. Blue dots are walking, with a line to where they go. Dashed rings are demand points: a citizen with an urgent need, or a task waiting for an office. Click a dot to open that person.`;
   }
 
   fail(e) {

@@ -58,7 +58,8 @@ def plot_run(run_dir: str | Path, smooth_days: int = 3) -> list[Path]:
             ax.plot(days, _smooth(v, smooth_days), color=colors[c], lw=2, label=f"city {c}")
             ax.scatter(days, v, color=colors[c], s=6, alpha=0.35)
         ax.set_ylabel(f"{good} price (gold)")
-        ax.set_yscale("log")
+        if any(r["good"] == good and (r.get("vwap") or r.get("last") or 0) > 0 for r in prices):
+            ax.set_yscale("log")  # a good that never traded has nothing to put on a log axis
         ax.grid(alpha=0.3)
         ax.legend(loc="upper left", frameon=False)
         _event_lines(ax, events)
@@ -127,7 +128,8 @@ def plot_compare(run_dirs: list[str | Path], labels: list[str], out: str | Path,
                 days, v = _series(rows, c, good)
                 ax.plot(days, _smooth(v, smooth_days), ls=styles[ri % 4], lw=2, label=lab)
             ax.set_title(f"{good} in {c}", fontsize=10)
-            ax.set_yscale("log")
+            if any(r["good"] == good and (r.get("vwap") or r.get("last") or 0) > 0 for _, rows, _ in runs for r in rows):
+                ax.set_yscale("log")
             ax.grid(alpha=0.3)
             for ev in runs[0][2] + [e for _, _, evs in runs[1:] for e in evs]:
                 ax.axvline(ev["day"], color="#999", ls="--", lw=0.8)

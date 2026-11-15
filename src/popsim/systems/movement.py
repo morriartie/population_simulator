@@ -96,7 +96,7 @@ def node_access(sim, city: int, nid: int) -> tuple[float, float] | None:
     return road.hours * frac + br.hours, road.stamina_cost * frac + br.stamina_cost
 
 
-def start_trip(sim, eid: int, act: Action, city: int, nid: int, ticks: int) -> None:
+def start_trip(sim, eid: int, act: Action, city: int, nid: int, ticks: int, then_kind: str = "gather") -> None:
     """Leave ``city`` for the overworld node ``nid``: the out leg is a committed walk at the trip's own
     hours and stamina, then the shift starts (REQ-3A.11). The citizen is on the roads, in no city, and
     cannot trade until it is back."""
@@ -109,7 +109,7 @@ def start_trip(sim, eid: int, act: Action, city: int, nid: int, ticks: int) -> N
     act.kind, act.target, act.ticks_left, act.carry = "walk", nid, n, 0.0
     act.walk_from, act.walk_to, act.walk_total = here, there, n
     act.walk_stamina = stamina / n
-    act.then = ("gather", nid, ticks)
+    act.then = (then_kind, nid, ticks)
     sim.world.add(eid, Trip(origin=city, node=nid))
     sim.world.get(eid, Location).city = None
 

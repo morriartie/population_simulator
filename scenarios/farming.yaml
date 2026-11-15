@@ -1,0 +1,34 @@
+# Demand-driven jobs (REQ-5A): food is scarce at first (one small food spot per city), so more than 10% of the
+# citizens soon have food at their urgent level. That puts need:food points on each city's board; the `plant_food`
+# rule then commissions a field outside the city. Planting needs seeds from the city depot, which only an estate
+# finance worker at an office can hand out, so the field's task posts a service signal and the `finance_office` rule
+# opens the office. A planter walks to the office, fetches the seeds, travels out, plants and comes back; the field
+# grows for a few days and becomes a food spot that also yields seeds, which citizens sell and the city buys.
+# Set `enabled: false` to compare. The forestry policy does the same for wood and shelter, with no seeds or office.
+extends: default
+world_name: farming
+housing_pct: 100
+time: {days: 40}
+goods: [food, wood, seed]
+
+pricing:
+  initial_prices: {food: 2.0, wood: 2.0, seed: 3.0}
+
+cities:
+  - {name: A, x: 0, y: 0, radius: 4, population: 60, depot: {seed: 30}}
+  - {name: B, x: 30, y: 40, radius: 3, population: 60, depot: {seed: 30}}
+
+roads:
+  - {a: A, b: B}
+
+nodes:
+  - {good: food, at: [10, 2],  branch: {road: [A, B], t: 0.15}, initial: 120, max_amount: 150, regen_per_hour: 2.0, base_rate: 0.7, stamina_cost: 5.0, byproduct: {seed: 0.1}}
+  - {good: food, at: [34, 30], branch: {road: [A, B], t: 0.85}, initial: 120, max_amount: 150, regen_per_hour: 2.0, base_rate: 0.7, stamina_cost: 5.0, byproduct: {seed: 0.1}}
+  - {good: wood, at: [-6, 20], branch: {road: [A, B], t: 0.4},  initial: 300, max_amount: 400, regen_per_hour: 4.0, base_rate: 0.7, stamina_cost: 5.0}
+
+fiscal:
+  income_tax: 0.1
+
+policies:
+  farming:
+    enabled: true

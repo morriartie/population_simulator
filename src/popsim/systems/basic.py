@@ -6,6 +6,7 @@ from popsim.components import (
     Action, Demographics, Health, Home, Location, Metabolism, NPC, Needs, RegenerationRate,
     Road, Stamina, Traits, Yield,
 )
+from popsim import resources
 from popsim.ledger import GOLD
 from popsim.systems.agent import urgency, wealth_target
 from popsim.systems.movement import at_home, cfg as movement_cfg
@@ -133,7 +134,7 @@ class PhysiologySystem:
         rng = sim.rng
         mults = {"sleep": mcfg["sleep_multiplier"], "gather": mcfg["work_multiplier"],
                  "travel": mcfg["travel_multiplier"], "walk": mcfg["travel_multiplier"],
-                 "work": mcfg["work_multiplier"]}
+                 "work": mcfg["work_multiplier"], "task": mcfg["work_multiplier"]}
         home_mult = movement_cfg(sim)["home_rest_multiplier"]
         dead = []
         for eid, (st, met, hl, needs, act) in sim.world.query(Stamina, Metabolism, Health, Needs, Action):
@@ -223,10 +224,9 @@ class ConsumptionSystem:
     name = "consumption"
 
     def run(self, sim) -> None:
-        per_food = sim.cfg["physiology"]["metabolism"]["satiety_per_food"]
-        per_wood = sim.cfg["shelter"]["per_wood"]
+        contract = resources.of(sim).consumption()
         for eid, (needs, met) in sim.world.query(Needs, Metabolism):
-            for good, need, per in (("food", "food", per_food), ("wood", "shelter", per_wood)):
+            for good, need, per in contract:
                 level = needs.levels[need]
                 if level >= needs.comfort[need]:
                     continue

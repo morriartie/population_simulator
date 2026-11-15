@@ -78,6 +78,11 @@ def _label(sim, act: Action) -> str | None:
         where = sim.city_name(loc.city) if loc is not None and loc.city is not None else (
             "the overworld" if sim.world.get(act.target, Branch) is not None else "?")
         return f"{y.good} at {where}" if y is not None else None
+    if act.kind == "task":
+        from popsim.components import Tags
+
+        tg = sim.world.get(act.target, Tags)
+        return f"{tg.process} site {act.target}" if tg is not None else None
     if act.kind == "travel":
         return f"to {sim.city_name(act.target)}"
     if act.kind == "walk":
